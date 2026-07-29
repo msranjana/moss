@@ -114,10 +114,6 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(500, {"error": "Playground HTML not found"})
             return
         html = PLAYGROUND_HTML.read_text(encoding="utf-8")
-        html = html.replace(
-            "</title>",
-            f'</title>\n<meta name="moss-token" content="{self._token}" />',
-        )
         self._send_html(html)
 
     def _handle_list_indexes(self) -> None:
@@ -270,6 +266,7 @@ def playground_command(
 
     server = HTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
+    frag_url = f"{url}/#{PlaygroundHandler._token}"
 
     console.print()
     console.print("  [bold]Moss Playground[/bold]")
@@ -279,7 +276,7 @@ def playground_command(
     console.print()
 
     if not no_open:
-        webbrowser.open(url)
+        webbrowser.open(frag_url)
 
     try:
         server.serve_forever()
