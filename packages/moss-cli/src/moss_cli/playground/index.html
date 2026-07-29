@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Moss Playground</title>
+<script type="importmap">
+{
+  "imports": {
+    "@moss-dev/moss-web": "https://unpkg.com/@moss-dev/moss-web@1.0.0/dist/index.js",
+    "@moss-dev/moss-wasm": "https://unpkg.com/@moss-dev/moss-wasm@0.10.0/moss_wasm.js",
+    "onnxruntime-web": "https://unpkg.com/onnxruntime-web@1.27.0/dist/ort.bundle.min.mjs"
+  }
+}
+</script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f0f13;--surface:#1a1a23;--surface2:#22222e;--border:#2e2e3a;--text:#e8e8ef;--text2:#8888a0;--primary:#6366f1;--primary-hover:#5558e6;--success:#22c55e;--error:#ef4444;--warning:#f59e0b;--radius:8px;--font:system-ui,-apple-system,sans-serif;--mono:'SF Mono','Fira Code','Cascadia Code',monospace}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;min-height:100vh}
+.container{max-width:1200px;margin:0 auto;padding:24px}
+header{text-align:center;margin-bottom:32px}
+header h1{font-size:24px;font-weight:700;letter-spacing:-0.5px}
+header h1 span{color:var(--primary)}
+header p{color:var(--text2);font-size:13px;margin-top:4px}
+.grid{display:grid;grid-template-columns:320px 1fr;gap:24px}
+@media(max-width:768px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.panel-title{font-size:15px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:4px}
+select,input[type=text],input[type=number]{width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color .15s}
+select:focus,input:focus{border-color:var(--primary)}
+select option{background:var(--surface2);color:var(--text)}
+input[type=number]{width:72px}
+input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:pointer;background:transparent}
+.btn{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s;font-family:var(--font)}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{background:var(--border)}
+.btn-secondary:disabled{opacity:.4;cursor:not-allowed}
+.btn-success{background:var(--success);color:#fff}
+.btn-success:disabled{opacity:.4;cursor:not-allowed}
+.spinner{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.controls{margin-bottom:16px}
+.control-row{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.control-row label{display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap}
+.control-row .range-wrap{flex:1;display:flex;align-items:center;gap:8px}
+.control-row .range-wrap span{font-size:11px;color:var(--text2);white-space:nowrap}
+.alpha-value{font-family:var(--mono);font-size:12px;color:var(--text2);min-width:48px;text-align:right}
+.status-box{padding:10px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:8px;margin-top:12px}
+.status-success{background:color-mix(in srgb,var(--success) 15%,transparent);color:var(--success);border:1px solid color-mix(in srgb,var(--success) 30%,transparent)}
+.status-error{background:color-mix(in srgb,var(--error) 15%,transparent);color:var(--error);border:1px solid color-mix(in srgb,var(--error) 30%,transparent)}
+.search-form{margin-bottom:12px}
+.search-group{display:flex;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:2px;transition:border-color .15s}
+.search-group:focus-within{border-color:var(--primary)}
+.search-group input{flex:1;background:transparent;border:none;padding:10px 8px;color:var(--text);font-size:14px;outline:none}
+.search-group input::placeholder{color:var(--text2)}
+.search-group input:disabled{opacity:.5}
+.search-icon{padding:0 4px 0 10px;color:var(--text2);display:flex}
+.index-select{display:flex;gap:8px;margin-bottom:16px}
+.index-select select{flex:1}
+.index-info{font-size:12px;color:var(--text2);margin-bottom:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;font-family:var(--mono);word-break:break-all;line-height:1.6}
+.index-info strong{color:var(--text)}
+.results-summary{font-size:12px;color:var(--text2);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.result-item{padding:12px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;transition:border-color .15s}
+.result-item:hover{border-color:var(--primary)}
+.result-meta{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.result-score{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;font-family:var(--mono);background:color-mix(in srgb,var(--success) 20%,transparent);color:var(--success)}
+.result-score.low{background:color-mix(in srgb,var(--warning) 20%,transparent);color:var(--warning)}
+.result-id{font-size:11px;color:var(--text2);font-family:var(--mono)}
+.result-text{font-size:13px;color:var(--text);line-height:1.5;word-break:break-word}
+.empty-state{text-align:center;padding:48px 24px;color:var(--text2)}
+.empty-state svg{width:48px;height:48px;margin-bottom:12px;opacity:.3}
+.empty-state p{font-size:13px}
+.creds-form{display:flex;flex-direction:column;gap:12px;max-width:400px;margin:48px auto}
+.creds-form h2{text-align:center;font-size:18px;margin-bottom:8px}
+.creds-form p{text-align:center;font-size:12px;color:var(--text2)}
+.creds-form input{padding:10px 12px}
+.creds-form .btn{width:100%;justify-content:center;padding:10px}
+.hidden{display:none!important}
+.result-timestamp{font-size:10px;color:var(--text2);opacity:.5}
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <header>
+    <h1>Moss <span>Playground</span></h1>
+    <p>Load an index, run queries, and inspect results &mdash; all in your browser via WASM</p>
+  </header>
+
+  <div id="creds-panel" class="creds-form hidden">
+    <h2>Connect to Moss</h2>
+    <p>Enter your Project ID and Project Key to get started.</p>
+    <input id="pid-input" type="text" placeholder="Project ID" />
+    <input id="pkey-input" type="password" placeholder="Project Key" />
+    <button class="btn btn-primary" id="connect-btn">Connect</button>
+  </div>
+
+  <div id="main-panel" class="hidden">
+    <div class="grid">
+      <!-- Left: Index Selection -->
+      <div>
+        <div class="panel">
+          <div class="panel-title">Index</div>
+          <div class="index-select">
+            <select id="index-select">
+              <option value="">Loading indexes...</option>
+            </select>
+          </div>
+          <div id="index-info" class="index-info hidden"></div>
+          <button class="btn btn-primary" id="load-btn" disabled style="width:100%;justify-content:center">
+            Load Index
+          </button>
+          <div id="load-status" class="hidden"></div>
+        </div>
+      </div>
+
+      <!-- Right: Search -->
+      <div>
+        <div class="panel">
+          <div class="panel-title">Search</div>
+          <div class="search-form">
+            <form id="search-form" autocomplete="off">
+              <div class="search-group">
+                <span class="search-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                </span>
+                <input type="text" id="search-input" placeholder="Type to search..." disabled />
+              </div>
+            </form>
+          </div>
+
+          <div class="controls">
+            <div class="control-row">
+              <label>Top K <input type="number" id="topk-input" min="1" max="50" value="5" disabled /></label>
+              <div class="range-wrap">
+                <span>Keyword</span>
+                <input type="range" id="alpha-slider" min="0" max="1" step="0.05" value="0.5" disabled />
+                <span>Semantic</span>
+                <span class="alpha-value" id="alpha-display">&alpha; 0.50</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="results">
+            <div class="empty-state" id="results-placeholder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <p>Load an index and type a query to search</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+let MossClientClass = null;
+let client = null;
+let indexes = [];
+let currentIndex = null;
+let isIndexLoaded = false;
+
+const $ = id => document.getElementById(id);
+const select = $('index-select');
+const loadBtn = $('load-btn');
+const loadStatus = $('load-status');
+const indexInfo = $('index-info');
+const searchInput = $('search-input');
+const topkInput = $('topk-input');
+const alphaSlider = $('alpha-slider');
+const alphaDisplay = $('alpha-display');
+const results = $('results');
+const resultsPlaceholder = $('results-placeholder');
+const searchForm = $('search-form');
+const pidInput = $('pid-input');
+const pkeyInput = $('pkey-input');
+const connectBtn = $('connect-btn');
+const credsPanel = $('creds-panel');
+const mainPanel = $('main-panel');
+
+let projectId = '';
+let projectKey = '';
+
+function resolveCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+async function loadMossClient() {
+  try {
+    const mod = await import("@moss-dev/moss-web");
+    MossClientClass = mod.MossClient;
+    return true;
+  } catch (e) {
+    console.error('Failed to load @moss-dev/moss-web:', e);
+    return false;
+  }
+}
+
+function showCredsForm(message) {
+  credsPanel.classList.remove('hidden');
+  mainPanel.classList.add('hidden');
+  if (message) {
+    const existing = credsPanel.querySelector('.status-error');
+    if (existing) existing.remove();
+    const err = document.createElement('div');
+    err.className = 'status-box status-error';
+    err.textContent = message;
+    credsPanel.appendChild(err);
+  }
+}
+
+function initClient(id, key) {
+  if (!MossClientClass) return false;
+  if (client) client.dispose();
+  client = new MossClientClass(id, key);
+  projectId = id;
+  projectKey = key;
+  return true;
+}
+
+async function fetchIndexes() {
+  try {
+    const res = await fetch('/api/indexes');
+    if (!res.ok) throw new Error('Failed to fetch indexes');
+    const data = await res.json();
+    indexes = data.indexes || [];
+    return indexes;
+  } catch {
+    // fallback: list via cloud API using client
+    if (!client) return [];
+    try {
+      indexes = await client.listIndexes();
+      return indexes;
+    } catch (e) {
+      console.error('listIndexes failed:', e);
+      return [];
+    }
+  }
+}
+
+async function refreshIndexList() {
+  select.innerHTML = '<option value="">Loading...</option>';
+  const idxs = await fetchIndexes();
+  select.innerHTML = '';
+  if (idxs.length === 0) {
+    select.innerHTML = '<option value="">No indexes found</option>';
+    loadBtn.disabled = true;
+    return;
+  }
+  idxs.forEach(idx => {
+    const opt = document.createElement('option');
+    opt.value = idx.name;
+    const status = idx.status === 'Ready' ? '' : ` (${idx.status})`;
+    opt.textContent = `${idx.name}${status} — ${idx.docCount || 0} docs`;
+    select.appendChild(opt);
+  });
+  select.value = '';
+  updateLoadBtn();
+}
+
+function updateLoadBtn() {
+  const name = select.value;
+  loadBtn.disabled = !name || isIndexLoaded;
+}
+
+function showIndexInfo(idx) {
+  if (!idx) {
+    indexInfo.classList.add('hidden');
+    return;
+  }
+  indexInfo.classList.remove('hidden');
+  indexInfo.innerHTML = '';
+  const rows = [
+    ['Name', idx.name],
+    ['Status', idx.status],
+    ['Documents', String(idx.docCount ?? 0)],
+    ['Model', idx.model?.id ?? 'unknown'],
+    ['Created', idx.createdAt ?? 'unknown'],
+  ];
+  for (const [label, value] of rows) {
+    const strong = document.createElement('strong');
+    strong.textContent = label + ':';
+    indexInfo.appendChild(strong);
+    indexInfo.appendChild(document.createTextNode(' ' + value + '\n'));
+  }
+}
+
+async function loadIndex() {
+  const name = select.value;
+  if (!name || !client) return;
+
+  loadBtn.disabled = true;
+  loadBtn.innerHTML = '<span class="spinner">&#9696;</span> Loading...';
+  loadStatus.classList.remove('hidden');
+  loadStatus.className = 'status-box';
+  loadStatus.textContent = 'Connecting to cloud...';
+
+  try {
+    await client.loadIndex(name);
+    isIndexLoaded = true;
+    currentIndex = name;
+    loadBtn.innerHTML = '&#10003; Loaded';
+    loadBtn.className = 'btn btn-success';
+    loadStatus.className = 'status-box status-success';
+    loadStatus.textContent = 'Index loaded into browser memory';
+    searchInput.disabled = false;
+    searchInput.focus();
+    topkInput.disabled = false;
+    alphaSlider.disabled = false;
+  } catch (e) {
+    console.error('loadIndex failed:', e);
+    isIndexLoaded = false;
+    loadBtn.innerHTML = 'Load Index';
+    loadBtn.className = 'btn btn-primary';
+    loadBtn.disabled = false;
+    loadStatus.className = 'status-box status-error';
+    loadStatus.textContent = `Failed: ${e.message || e}`;
+  }
+}
+
+function renderResults(searchResults) {
+  results.innerHTML = '';
+
+  if (!searchResults || !searchResults.docs || searchResults.docs.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<p>No matching results. Try a different query.</p>';
+    results.appendChild(empty);
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'results-summary';
+  const timeMs = searchResults.timeTakenMs || searchResults.timeTakenInMs;
+  summary.innerHTML = `
+    <span>${searchResults.docs.length} result(s)</span>
+    ${timeMs != null ? `<span>${timeMs.toFixed(1)} ms</span>` : ''}
+  `;
+  results.appendChild(summary);
+
+  searchResults.docs.forEach(doc => {
+    const item = document.createElement('div');
+    item.className = 'result-item';
+    const score = doc.score || 0;
+    const scorePct = (score * 100).toFixed(0);
+    const scoreClass = score < 0.75 ? 'result-score low' : 'result-score';
+
+    item.innerHTML = `
+      <div class="result-meta">
+        <span class="${scoreClass}">${scorePct}%</span>
+        <span class="result-id">${doc.id}</span>
+      </div>
+      <div class="result-text">${escapeHtml(doc.text)}</div>
+    `;
+    results.appendChild(item);
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+let searchTimeout = null;
+
+function handleSearch(e) {
+  if (e) e.preventDefault();
+  if (!isIndexLoaded || !client || !currentIndex) return;
+
+  const query = searchInput.value.trim();
+  if (!query) {
+    results.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<p>Type a query to search</p>';
+    results.appendChild(empty);
+    return;
+  }
+
+  const topK = parseInt(topkInput.value) || 5;
+  const alpha = parseFloat(alphaSlider.value) || 0.5;
+
+  if (searchTimeout) clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(async () => {
+    const placeholder = results.querySelector('.empty-state');
+    if (placeholder) placeholder.innerHTML = '<p>Searching...</p>';
+
+    try {
+      console.log('Querying with topK:', topK, 'alpha:', alpha);
+      const searchResults = await client.query(currentIndex, query, { topK, alpha });
+      console.log('Results count:', searchResults.docs?.length);
+      renderResults(searchResults);
+    } catch (e) {
+      console.error('Query failed:', e);
+      results.innerHTML = `<div class="status-box status-error">Query failed: ${escapeHtml(e.message || e)}</div>`;
+    }
+  }, 150);
+}
+
+// ── Event listeners ──
+select.addEventListener('change', () => {
+  updateLoadBtn();
+  const name = select.value;
+  const idx = indexes.find(i => i.name === name);
+  showIndexInfo(idx);
+});
+
+loadBtn.addEventListener('click', loadIndex);
+
+searchForm.addEventListener('submit', handleSearch);
+searchInput.addEventListener('input', handleSearch);
+
+topkInput.addEventListener('input', () => {
+  if (isIndexLoaded && searchInput.value.trim()) handleSearch();
+});
+
+alphaSlider.addEventListener('input', () => {
+  const val = parseFloat(alphaSlider.value);
+  alphaDisplay.textContent = `\u03B1 ${val.toFixed(2)}`;
+  if (isIndexLoaded && searchInput.value.trim()) handleSearch();
+});
+
+connectBtn.addEventListener('click', () => {
+  const pid = pidInput.value.trim();
+  const pkey = pkeyInput.value.trim();
+  if (!pid || !pkey) return;
+  if (!initClient(pid, pkey)) {
+    showCredsForm('Failed to initialize MossClient. SDK may not be loaded yet.');
+    return;
+  }
+  startApp();
+});
+
+// ── Init ──
+async function startApp() {
+  credsPanel.classList.add('hidden');
+  mainPanel.classList.remove('hidden');
+  await refreshIndexList();
+  // Auto-load first index if available
+  if (select.options.length > 0 && select.options[0].value) {
+    select.value = select.options[0].value;
+    const idx = indexes.find(i => i.name === select.value);
+    showIndexInfo(idx);
+    updateLoadBtn();
+  }
+}
+
+async function init() {
+  const loaded = await loadMossClient();
+  if (!loaded) {
+    showCredsForm('Failed to load @moss-dev/moss-web SDK from CDN. Check your internet connection.');
+    return;
+  }
+
+  showCredsForm();
+}
+
+// Re-run search when index state changes (trigger a reload effect)
+const origLoadIndex = loadIndex;
+loadIndex = async function() {
+  await origLoadIndex();
+  if (searchInput.value.trim()) handleSearch();
+};
+
+init();
+</script>
+</body>
+</html>
