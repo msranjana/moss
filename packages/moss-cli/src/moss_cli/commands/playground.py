@@ -62,11 +62,13 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(403, {"error": "Forbidden: invalid or missing token"})
             return False
         host = self.headers.get("Host", "")
-        if host and host != self._server_host and host != self._server_host.replace("127.0.0.1", "localhost"):
+        allowed_hosts = {self._server_host, self._server_host.replace("127.0.0.1", "localhost")}
+        if host and host not in allowed_hosts:
             self._send_json(403, {"error": "Forbidden: invalid Host header"})
             return False
         origin = self.headers.get("Origin", "")
-        if origin and origin != f"http://{self._server_host}":
+        allowed_origins = {f"http://{h}" for h in allowed_hosts}
+        if origin and origin not in allowed_origins:
             self._send_json(403, {"error": "Forbidden: invalid Origin"})
             return False
         return True

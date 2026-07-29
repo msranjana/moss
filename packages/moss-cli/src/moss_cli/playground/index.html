@@ -193,11 +193,19 @@ async function refreshIndexList() {
 
 function updateLoadBtn() {
   const name = select.value;
-  loadBtn.disabled = !name || name === currentIndex;
-  if (name !== currentIndex && currentIndex) {
-    searchInput.disabled = true;
-    topkInput.disabled = true;
-    alphaSlider.disabled = true;
+  const isLoaded = name === currentIndex;
+  loadBtn.disabled = !name || isLoaded;
+  loadBtn.innerHTML = isLoaded ? '&#10003; Loaded' : 'Load Index';
+  loadBtn.className = isLoaded ? 'btn btn-success' : 'btn btn-primary';
+  searchInput.disabled = !isLoaded;
+  topkInput.disabled = !isLoaded;
+  alphaSlider.disabled = !isLoaded;
+  if (isLoaded) {
+    loadStatus.className = 'status-box status-success';
+    loadStatus.textContent = 'Index loaded into server memory';
+    loadStatus.classList.remove('hidden');
+  } else {
+    loadStatus.classList.add('hidden');
   }
 }
 
@@ -249,22 +257,16 @@ async function loadIndex() {
     }
     if (loadReqId !== requestId || select.value !== name) return;
     currentIndex = name;
-    loadBtn.innerHTML = '&#10003; Loaded';
-    loadBtn.className = 'btn btn-success';
-    loadBtn.disabled = false;
-    loadStatus.className = 'status-box status-success';
-    loadStatus.textContent = 'Index loaded into server memory';
-    searchInput.disabled = false;
+    updateLoadBtn();
     searchInput.focus();
-    topkInput.disabled = false;
-    alphaSlider.disabled = false;
   } catch (e) {
     if (loadReqId !== requestId) return;
     console.error('loadIndex failed:', e);
     currentIndex = null;
-    loadBtn.innerHTML = 'Load Index';
-    loadBtn.className = 'btn btn-primary';
-    loadBtn.disabled = false;
+    updateLoadBtn();
+    loadStatus.classList.remove('hidden');
+    loadStatus.className = 'status-box status-error';
+    loadStatus.textContent = `Failed: ${e.message || e}`;
     loadStatus.className = 'status-box status-error';
     loadStatus.textContent = `Failed: ${e.message || e}`;
   } finally {
