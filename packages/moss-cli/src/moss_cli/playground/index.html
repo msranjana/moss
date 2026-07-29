@@ -4,15 +4,6 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Moss Playground</title>
-<script type="importmap">
-{
-  "imports": {
-    "@moss-dev/moss-web": "https://unpkg.com/@moss-dev/moss-web@1.0.0/dist/index.js",
-    "@moss-dev/moss-wasm": "https://unpkg.com/@moss-dev/moss-wasm@0.10.0/moss_wasm.js",
-    "onnxruntime-web": "https://unpkg.com/onnxruntime-web@1.27.0/dist/ort.bundle.min.mjs"
-  }
-}
-</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0f0f13;--surface:#1a1a23;--surface2:#22222e;--border:#2e2e3a;--text:#e8e8ef;--text2:#8888a0;--primary:#6366f1;--primary-hover:#5558e6;--success:#22c55e;--error:#ef4444;--warning:#f59e0b;--radius:8px;--font:system-ui,-apple-system,sans-serif;--mono:'SF Mono','Fira Code','Cascadia Code',monospace}
@@ -74,11 +65,6 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 .empty-state{text-align:center;padding:48px 24px;color:var(--text2)}
 .empty-state svg{width:48px;height:48px;margin-bottom:12px;opacity:.3}
 .empty-state p{font-size:13px}
-.creds-form{display:flex;flex-direction:column;gap:12px;max-width:400px;margin:48px auto}
-.creds-form h2{text-align:center;font-size:18px;margin-bottom:8px}
-.creds-form p{text-align:center;font-size:12px;color:var(--text2)}
-.creds-form input{padding:10px 12px}
-.creds-form .btn{width:100%;justify-content:center;padding:10px}
 .hidden{display:none!important}
 .result-timestamp{font-size:10px;color:var(--text2);opacity:.5}
 </style>
@@ -87,18 +73,10 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 <div class="container" id="app">
   <header>
     <h1>Moss <span>Playground</span></h1>
-    <p>Load an index, run queries, and inspect results &mdash; all in your browser via WASM</p>
+    <p>Load an index, run queries, and inspect results &mdash; all proxied through your local server</p>
   </header>
 
-  <div id="creds-panel" class="creds-form hidden">
-    <h2>Connect to Moss</h2>
-    <p>Enter your Project ID and Project Key to get started.</p>
-    <input id="pid-input" type="text" placeholder="Project ID" />
-    <input id="pkey-input" type="password" placeholder="Project Key" />
-    <button class="btn btn-primary" id="connect-btn">Connect</button>
-  </div>
-
-  <div id="main-panel" class="hidden">
+  <div id="main-panel">
     <div class="grid">
       <!-- Left: Index Selection -->
       <div>
@@ -145,7 +123,7 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
           </div>
 
           <div id="results">
-            <div class="empty-state" id="results-placeholder">
+            <div class="empty-state">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
               <p>Load an index and type a query to search</p>
             </div>
@@ -157,11 +135,9 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 </div>
 
 <script type="module">
-let MossClientClass = null;
-let client = null;
 let indexes = [];
 let currentIndex = null;
-let isIndexLoaded = false;
+let requestId = 0;
 
 const $ = id => document.getElementById(id);
 const select = $('index-select');
@@ -173,53 +149,7 @@ const topkInput = $('topk-input');
 const alphaSlider = $('alpha-slider');
 const alphaDisplay = $('alpha-display');
 const results = $('results');
-const resultsPlaceholder = $('results-placeholder');
 const searchForm = $('search-form');
-const pidInput = $('pid-input');
-const pkeyInput = $('pkey-input');
-const connectBtn = $('connect-btn');
-const credsPanel = $('creds-panel');
-const mainPanel = $('main-panel');
-
-let projectId = '';
-let projectKey = '';
-
-function resolveCssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-async function loadMossClient() {
-  try {
-    const mod = await import("@moss-dev/moss-web");
-    MossClientClass = mod.MossClient;
-    return true;
-  } catch (e) {
-    console.error('Failed to load @moss-dev/moss-web:', e);
-    return false;
-  }
-}
-
-function showCredsForm(message) {
-  credsPanel.classList.remove('hidden');
-  mainPanel.classList.add('hidden');
-  if (message) {
-    const existing = credsPanel.querySelector('.status-error');
-    if (existing) existing.remove();
-    const err = document.createElement('div');
-    err.className = 'status-box status-error';
-    err.textContent = message;
-    credsPanel.appendChild(err);
-  }
-}
-
-function initClient(id, key) {
-  if (!MossClientClass) return false;
-  if (client) client.dispose();
-  client = new MossClientClass(id, key);
-  projectId = id;
-  projectKey = key;
-  return true;
-}
 
 async function fetchIndexes() {
   try {
@@ -228,16 +158,9 @@ async function fetchIndexes() {
     const data = await res.json();
     indexes = data.indexes || [];
     return indexes;
-  } catch {
-    // fallback: list via cloud API using client
-    if (!client) return [];
-    try {
-      indexes = await client.listIndexes();
-      return indexes;
-    } catch (e) {
-      console.error('listIndexes failed:', e);
-      return [];
-    }
+  } catch (e) {
+    console.error('fetchIndexes failed:', e);
+    return [];
   }
 }
 
@@ -263,7 +186,12 @@ async function refreshIndexList() {
 
 function updateLoadBtn() {
   const name = select.value;
-  loadBtn.disabled = !name || isIndexLoaded;
+  loadBtn.disabled = !name || name === currentIndex;
+  if (name !== currentIndex && currentIndex) {
+    searchInput.disabled = true;
+    topkInput.disabled = true;
+    alphaSlider.disabled = true;
+  }
 }
 
 function showIndexInfo(idx) {
@@ -290,7 +218,7 @@ function showIndexInfo(idx) {
 
 async function loadIndex() {
   const name = select.value;
-  if (!name || !client) return;
+  if (!name) return;
 
   loadBtn.disabled = true;
   loadBtn.innerHTML = '<span class="spinner">&#9696;</span> Loading...';
@@ -299,20 +227,28 @@ async function loadIndex() {
   loadStatus.textContent = 'Connecting to cloud...';
 
   try {
-    await client.loadIndex(name);
-    isIndexLoaded = true;
+    const res = await fetch('/api/load-index', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to load index');
+    }
     currentIndex = name;
     loadBtn.innerHTML = '&#10003; Loaded';
     loadBtn.className = 'btn btn-success';
+    loadBtn.disabled = false;
     loadStatus.className = 'status-box status-success';
-    loadStatus.textContent = 'Index loaded into browser memory';
+    loadStatus.textContent = 'Index loaded into server memory';
     searchInput.disabled = false;
     searchInput.focus();
     topkInput.disabled = false;
     alphaSlider.disabled = false;
   } catch (e) {
     console.error('loadIndex failed:', e);
-    isIndexLoaded = false;
+    currentIndex = null;
     loadBtn.innerHTML = 'Load Index';
     loadBtn.className = 'btn btn-primary';
     loadBtn.disabled = false;
@@ -334,10 +270,10 @@ function renderResults(searchResults) {
 
   const summary = document.createElement('div');
   summary.className = 'results-summary';
-  const timeMs = searchResults.timeTakenMs || searchResults.timeTakenInMs;
+  const timeMs = searchResults.timeTakenMs;
   summary.innerHTML = `
     <span>${searchResults.docs.length} result(s)</span>
-    ${timeMs != null ? `<span>${timeMs.toFixed(1)} ms</span>` : ''}
+    ${timeMs != null ? `<span>${timeMs} ms</span>` : ''}
   `;
   results.appendChild(summary);
 
@@ -348,13 +284,26 @@ function renderResults(searchResults) {
     const scorePct = (score * 100).toFixed(0);
     const scoreClass = score < 0.75 ? 'result-score low' : 'result-score';
 
-    item.innerHTML = `
-      <div class="result-meta">
-        <span class="${scoreClass}">${scorePct}%</span>
-        <span class="result-id">${escapeHtml(doc.id)}</span>
-      </div>
-      <div class="result-text">${escapeHtml(doc.text)}</div>
-    `;
+    const meta = document.createElement('div');
+    meta.className = 'result-meta';
+
+    const scoreSpan = document.createElement('span');
+    scoreSpan.className = scoreClass;
+    scoreSpan.textContent = `${scorePct}%`;
+    meta.appendChild(scoreSpan);
+
+    const idSpan = document.createElement('span');
+    idSpan.className = 'result-id';
+    idSpan.textContent = doc.id;
+    meta.appendChild(idSpan);
+
+    item.appendChild(meta);
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'result-text';
+    textDiv.textContent = doc.text;
+    item.appendChild(textDiv);
+
     results.appendChild(item);
   });
 }
@@ -369,7 +318,7 @@ let searchTimeout = null;
 
 function handleSearch(e) {
   if (e) e.preventDefault();
-  if (!isIndexLoaded || !client || !currentIndex) return;
+  if (!currentIndex) return;
 
   const query = searchInput.value.trim();
   if (!query) {
@@ -381,27 +330,38 @@ function handleSearch(e) {
     return;
   }
 
-  const topK = parseInt(topkInput.value) || 5;
-  const alpha = parseFloat(alphaSlider.value) || 0.5;
+  const parsedTopK = parseInt(topkInput.value, 10);
+  const topK = Number.isNaN(parsedTopK) ? 5 : parsedTopK;
+  const parsedAlpha = parseFloat(alphaSlider.value);
+  const alpha = Number.isNaN(parsedAlpha) ? 0.5 : parsedAlpha;
 
   if (searchTimeout) clearTimeout(searchTimeout);
+  const thisRequestId = ++requestId;
   searchTimeout = setTimeout(async () => {
     const placeholder = results.querySelector('.empty-state');
     if (placeholder) placeholder.innerHTML = '<p>Searching...</p>';
 
     try {
-      console.log('Querying with topK:', topK, 'alpha:', alpha);
-      const searchResults = await client.query(currentIndex, query, { topK, alpha });
-      console.log('Results count:', searchResults.docs?.length);
+      const res = await fetch('/api/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentIndex, query, topK, alpha }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Query failed');
+      }
+      const searchResults = await res.json();
+      if (thisRequestId !== requestId) return;
       renderResults(searchResults);
     } catch (e) {
+      if (thisRequestId !== requestId) return;
       console.error('Query failed:', e);
       results.innerHTML = `<div class="status-box status-error">Query failed: ${escapeHtml(e.message || e)}</div>`;
     }
   }, 150);
 }
 
-// ── Event listeners ──
 select.addEventListener('change', () => {
   updateLoadBtn();
   const name = select.value;
@@ -415,58 +375,16 @@ searchForm.addEventListener('submit', handleSearch);
 searchInput.addEventListener('input', handleSearch);
 
 topkInput.addEventListener('input', () => {
-  if (isIndexLoaded && searchInput.value.trim()) handleSearch();
+  if (currentIndex && searchInput.value.trim()) handleSearch();
 });
 
 alphaSlider.addEventListener('input', () => {
   const val = parseFloat(alphaSlider.value);
-  alphaDisplay.textContent = `\u03B1 ${val.toFixed(2)}`;
-  if (isIndexLoaded && searchInput.value.trim()) handleSearch();
+  alphaDisplay.textContent = `\u03B1 ${Number.isNaN(val) ? '0.50' : val.toFixed(2)}`;
+  if (currentIndex && searchInput.value.trim()) handleSearch();
 });
 
-connectBtn.addEventListener('click', () => {
-  const pid = pidInput.value.trim();
-  const pkey = pkeyInput.value.trim();
-  if (!pid || !pkey) return;
-  if (!initClient(pid, pkey)) {
-    showCredsForm('Failed to initialize MossClient. SDK may not be loaded yet.');
-    return;
-  }
-  startApp();
-});
-
-// ── Init ──
-async function startApp() {
-  credsPanel.classList.add('hidden');
-  mainPanel.classList.remove('hidden');
-  await refreshIndexList();
-  // Auto-load first index if available
-  if (select.options.length > 0 && select.options[0].value) {
-    select.value = select.options[0].value;
-    const idx = indexes.find(i => i.name === select.value);
-    showIndexInfo(idx);
-    updateLoadBtn();
-  }
-}
-
-async function init() {
-  const loaded = await loadMossClient();
-  if (!loaded) {
-    showCredsForm('Failed to load @moss-dev/moss-web SDK from CDN. Check your internet connection.');
-    return;
-  }
-
-  showCredsForm();
-}
-
-// Re-run search when index state changes (trigger a reload effect)
-const origLoadIndex = loadIndex;
-loadIndex = async function() {
-  await origLoadIndex();
-  if (searchInput.value.trim()) handleSearch();
-};
-
-init();
+refreshIndexList();
 </script>
 </body>
 </html>

@@ -1,9 +1,8 @@
 """moss playground — local web UI for querying Moss indexes interactively.
 
 Starts a local HTTP server that serves a browser-based playground.
-Users can list cloud indexes, load one into browser memory via
-@moss-dev/moss-web (WASM), and run queries with adjustable
-Top-K and Alpha — all with sub-10ms latency after the initial load.
+Index and query operations are proxied through the server's credentialed
+MossClient — the project key never reaches the browser.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from urllib.parse import urlparse, parse_qs
 import typer
 from rich.console import Console
 
-from moss import MossClient
+from moss import MossClient, QueryOptions
 
 from ..config import resolve_credentials
 
@@ -47,12 +46,10 @@ def _index_info_to_dict(info: Any) -> Dict[str, Any]:
 
 
 class PlaygroundHandler(SimpleHTTPRequestHandler):
-    """HTTP handler that serves the playground HTML with injected credentials
-    and provides /api/ endpoints backed by the Moss Python SDK."""
+    """HTTP handler — serves the playground UI and proxies SDK calls server-side
+    so the project key is never exposed to the browser."""
 
     client: MossClient | None = None
-    project_id: str = ""
-    project_key: str = ""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
@@ -131,6 +128,66 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         elif len(args) >= 1:
             console.print(f"  [dim]{args[0]}[/dim]")
 
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length else "{}"
+        data = json.loads(body)
+
+        if path == "/api/load-index":
+            self._handle_post_load_index(data)
+        elif path == "/api/query":
+            self._handle_post_query(data)
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def _handle_post_load_index(self, data: dict) -> None:
+        client = self.client
+        if client is None:
+            self._send_json(500, {"error": "MossClient not initialized"})
+            return
+        name = data.get("name", "")
+        if not name:
+            self._send_json(400, {"error": "Missing 'name' in request body"})
+            return
+        try:
+            asyncio.run(client.load_index(name))
+            self._send_json(200, {"name": name})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_post_query(self, data: dict) -> None:
+        client = self.client
+        if client is None:
+            self._send_json(500, {"error": "MossClient not initialized"})
+            return
+        name = data.get("name", "")
+        query = data.get("query", "")
+        if not name or not query:
+            self._send_json(400, {"error": "Missing 'name' or 'query' in request body"})
+            return
+        top_k = data.get("topK")
+        alpha = data.get("alpha")
+        try:
+            opts = QueryOptions(top_k=top_k, alpha=alpha)
+            result = asyncio.run(client.query(name, query, opts))
+            docs = []
+            for d in result.docs:
+                docs.append({
+                    "id": d.id,
+                    "text": d.text,
+                    "score": d.score,
+                    "metadata": d.metadata,
+                })
+            self._send_json(200, {
+                "docs": docs,
+                "timeTakenMs": result.time_taken_ms,
+                "query": result.query,
+            })
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
 
 def _find_free_port(start: int = 8765, max_attempts: int = 20) -> int:
     for port in range(start, start + max_attempts):
@@ -146,10 +203,6 @@ def _find_free_port(start: int = 8765, max_attempts: int = 20) -> int:
 def playground_command(
     ctx: typer.Context,
     port: int = typer.Option(0, "--port", "-p", help="Port for the HTTP server (0 = auto)"),
-    index_dir: Optional[str] = typer.Option(
-        None, "--index-dir", "-d",
-        help="Directory with local .moss index files (experimental)",
-    ),
     profile: Optional[str] = typer.Option(
         None, "--profile", help="Credential profile name",
     ),
@@ -160,18 +213,10 @@ def playground_command(
     """Start the Moss Playground — a local web UI for interactive search.
 
     Launches a browser-based playground where you can list cloud indexes,
-    load one into browser memory via WASM, and run queries with adjustable
-    Top-K and Alpha controls — all with sub-10ms local latency.
+    load one into server memory, and run queries against it.
     """
     if profile:
         ctx.obj["profile"] = profile
-
-    if index_dir:
-        idx_path = Path(index_dir).resolve()
-        if not idx_path.is_dir():
-            console.print(f"[red]Index directory not found: {idx_path}[/red]")
-            raise typer.Exit(1)
-        console.print(f"[dim]Index directory: {idx_path}[/dim]")
 
     # Resolve credentials
     pid, pkey = resolve_credentials(
@@ -193,8 +238,6 @@ def playground_command(
     server_addr = ("127.0.0.1", final_port)
 
     PlaygroundHandler.client = client
-    PlaygroundHandler.project_id = pid
-    PlaygroundHandler.project_key = pkey
 
     server = HTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
