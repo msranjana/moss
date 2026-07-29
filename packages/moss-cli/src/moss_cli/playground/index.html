@@ -351,7 +351,7 @@ function renderResults(searchResults) {
     item.innerHTML = `
       <div class="result-meta">
         <span class="${scoreClass}">${scorePct}%</span>
-        <span class="result-id">${doc.id}</span>
+        <span class="result-id">${escapeHtml(doc.id)}</span>
       </div>
       <div class="result-text">${escapeHtml(doc.text)}</div>
     `;
