@@ -270,13 +270,18 @@ def playground_command(
 
     console.print()
     console.print("  [bold]Moss Playground[/bold]")
-    console.print(f"  [dim]Server:[/dim]  [cyan]{url}[/cyan]")
+    console.print(f"  [dim]Server:[/dim]  [cyan]{frag_url}[/cyan]")
     console.print(f"  [dim]Project:[/dim] {pid[:8]}...")
     console.print("  [dim]Stop:[/dim]    Ctrl+C")
     console.print()
 
+    opened = False
     if not no_open:
-        webbrowser.open(frag_url)
+        opened = webbrowser.open(frag_url)
+    if not opened:
+        console.print(f"  [yellow]Open this URL in your browser:[/yellow]")
+        console.print(f"  [cyan]{frag_url}[/cyan]")
+        console.print()
 
     try:
         server.serve_forever()

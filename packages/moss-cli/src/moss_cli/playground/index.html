@@ -227,8 +227,9 @@ async function loadIndex() {
   const name = select.value;
   if (!name) return;
 
-  ++requestId;
+  const loadReqId = ++requestId;
   if (searchTimeout) clearTimeout(searchTimeout);
+  select.disabled = true;
 
   loadBtn.disabled = true;
   loadBtn.innerHTML = '<span class="spinner">&#9696;</span> Loading...';
@@ -246,6 +247,7 @@ async function loadIndex() {
       const err = await res.json();
       throw new Error(err.error || 'Failed to load index');
     }
+    if (loadReqId !== requestId || select.value !== name) return;
     currentIndex = name;
     loadBtn.innerHTML = '&#10003; Loaded';
     loadBtn.className = 'btn btn-success';
@@ -257,6 +259,7 @@ async function loadIndex() {
     topkInput.disabled = false;
     alphaSlider.disabled = false;
   } catch (e) {
+    if (loadReqId !== requestId) return;
     console.error('loadIndex failed:', e);
     currentIndex = null;
     loadBtn.innerHTML = 'Load Index';
@@ -264,6 +267,8 @@ async function loadIndex() {
     loadBtn.disabled = false;
     loadStatus.className = 'status-box status-error';
     loadStatus.textContent = `Failed: ${e.message || e}`;
+  } finally {
+    select.disabled = false;
   }
 }
 
