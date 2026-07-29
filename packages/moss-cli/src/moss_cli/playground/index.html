@@ -135,6 +135,13 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 </div>
 
 <script type="module">
+const mossToken = document.querySelector('meta[name="moss-token"]')?.getAttribute('content') || '';
+
+function apiFetch(path, options = {}) {
+  const headers = { ...options.headers, 'X-Moss-Token': mossToken };
+  return fetch(path, { ...options, headers });
+}
+
 let indexes = [];
 let currentIndex = null;
 let requestId = 0;
@@ -153,7 +160,7 @@ const searchForm = $('search-form');
 
 async function fetchIndexes() {
   try {
-    const res = await fetch('/api/indexes');
+    const res = await apiFetch('/api/indexes');
     if (!res.ok) throw new Error('Failed to fetch indexes');
     const data = await res.json();
     indexes = data.indexes || [];
@@ -227,7 +234,7 @@ async function loadIndex() {
   loadStatus.textContent = 'Connecting to cloud...';
 
   try {
-    const res = await fetch('/api/load-index', {
+    const res = await apiFetch('/api/load-index', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -342,7 +349,7 @@ function handleSearch(e) {
     if (placeholder) placeholder.innerHTML = '<p>Searching...</p>';
 
     try {
-      const res = await fetch('/api/query', {
+      const res = await apiFetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: currentIndex, query, topK, alpha }),

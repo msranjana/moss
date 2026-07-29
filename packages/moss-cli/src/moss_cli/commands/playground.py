@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import socket
 import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -50,9 +51,25 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
     so the project key is never exposed to the browser."""
 
     client: MossClient | None = None
+    _token: str = ""
+    _server_host: str = ""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
+
+    def _check_api_request(self) -> bool:
+        if self.headers.get("X-Moss-Token") != self._token:
+            self._send_json(403, {"error": "Forbidden: invalid or missing token"})
+            return False
+        host = self.headers.get("Host", "")
+        if host and host != self._server_host and host != self._server_host.replace("127.0.0.1", "localhost"):
+            self._send_json(403, {"error": "Forbidden: invalid Host header"})
+            return False
+        origin = self.headers.get("Origin", "")
+        if origin and origin != f"http://{self._server_host}":
+            self._send_json(403, {"error": "Forbidden: invalid Origin"})
+            return False
+        return True
 
     def _send_json(self, status: int, data: dict) -> None:
         body = json.dumps(data).encode("utf-8")
@@ -81,8 +98,12 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
         elif path == "/api/indexes":
+            if not self._check_api_request():
+                return
             self._handle_list_indexes()
         elif path == "/api/index":
+            if not self._check_api_request():
+                return
             names = params.get("name", [])
             self._handle_get_index(names[0] if names else None)
         else:
@@ -93,6 +114,10 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(500, {"error": "Playground HTML not found"})
             return
         html = PLAYGROUND_HTML.read_text(encoding="utf-8")
+        html = html.replace(
+            "</title>",
+            f'</title>\n<meta name="moss-token" content="{self._token}" />',
+        )
         self._send_html(html)
 
     def _handle_list_indexes(self) -> None:
@@ -129,6 +154,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             console.print(f"  [dim]{args[0]}[/dim]")
 
     def do_POST(self) -> None:
+        if not self._check_api_request():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         length = int(self.headers.get("Content-Length", 0))
@@ -238,6 +265,8 @@ def playground_command(
     server_addr = ("127.0.0.1", final_port)
 
     PlaygroundHandler.client = client
+    PlaygroundHandler._token = secrets.token_urlsafe(32)
+    PlaygroundHandler._server_host = f"127.0.0.1:{final_port}"
 
     server = HTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
