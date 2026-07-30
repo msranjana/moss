@@ -11,6 +11,7 @@ import asyncio
 import json
 import secrets
 import socket
+import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,32 @@ console = Console()
 HERE = Path(__file__).resolve().parent.parent
 
 PLAYGROUND_HTML = HERE / "playground" / "index.html"
+
+
+class AsyncWorker:
+    """Single background thread with one persistent event loop.
+
+    All MossClient calls are submitted here so they execute serially on
+    one loop/thread — safe even when multiple HTTP handler threads are
+    active (ThreadingHTTPServer).
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def submit(self, coro) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    def stop(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join()
 
 
 def _index_info_to_dict(info: Any) -> Dict[str, Any]:
@@ -53,6 +80,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
     client: MossClient | None = None
     _token: str = ""
     _server_host: str = ""
+    _worker: AsyncWorker | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
@@ -120,25 +148,27 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
 
     def _handle_list_indexes(self) -> None:
         client = self.client
-        if client is None:
+        worker = self._worker
+        if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         try:
-            indexes = asyncio.run(client.list_indexes())
+            indexes = worker.submit(client.list_indexes())
             self._send_json(200, {"indexes": [_index_info_to_dict(i) for i in indexes]})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
     def _handle_get_index(self, name: str | None) -> None:
         client = self.client
-        if client is None:
+        worker = self._worker
+        if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         if not name:
             self._send_json(400, {"error": "Missing 'name' query parameter"})
             return
         try:
-            info = asyncio.run(client.get_index(name))
+            info = worker.submit(client.get_index(name))
             self._send_json(200, {"index": _index_info_to_dict(info)})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -169,7 +199,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
 
     def _handle_post_load_index(self, data: dict) -> None:
         client = self.client
-        if client is None:
+        worker = self._worker
+        if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         name = data.get("name", "")
@@ -177,14 +208,15 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' in request body"})
             return
         try:
-            asyncio.run(client.load_index(name))
+            worker.submit(client.load_index(name))
             self._send_json(200, {"name": name})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
     def _handle_post_query(self, data: dict) -> None:
         client = self.client
-        if client is None:
+        worker = self._worker
+        if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         name = data.get("name", "")
@@ -206,7 +238,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
                 return
         try:
             opts = QueryOptions(top_k=top_k, alpha=alpha)
-            result = asyncio.run(client.query(name, query, opts))
+            result = worker.submit(client.query(name, query, opts))
             docs = []
             for d in result.docs:
                 docs.append({
@@ -267,12 +299,14 @@ def playground_command(
 
     # Initialize the SDK client for API endpoints
     client = MossClient(pid, pkey)
+    worker = AsyncWorker()
 
     # Start server
     final_port = port if port else _find_free_port()
     server_addr = ("127.0.0.1", final_port)
 
     PlaygroundHandler.client = client
+    PlaygroundHandler._worker = worker
     PlaygroundHandler._token = secrets.token_urlsafe(32)
     PlaygroundHandler._server_host = f"127.0.0.1:{final_port}"
 
@@ -300,3 +334,4 @@ def playground_command(
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
         server.server_close()
+        worker.stop()
