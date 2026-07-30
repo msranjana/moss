@@ -49,6 +49,9 @@ class AsyncWorker:
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
+        self._lock = asyncio.run_coroutine_threadsafe(
+            asyncio.Lock(), self._loop
+        ).result()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -65,10 +68,11 @@ class AsyncWorker:
         """
 
         async def runner():
-            result = coro_fn()
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            async with self._lock:
+                result = coro_fn()
+                if inspect.isawaitable(result):
+                    return await result
+                return result
 
         future = asyncio.run_coroutine_threadsafe(runner(), self._loop)
         return future.result()
