@@ -15,6 +15,7 @@ Moss CLI wraps the [Moss Python SDK](https://docs.moss.dev/) so you can build an
 - **Multiple output formats** — rich tables for humans, `--json` for scripts
 - **Job tracking** — poll background jobs with live progress display
 - **Pipe-friendly** — stdin/stdout support for composing with other tools
+- **Local Playground** — browser-based UI for interactive querying without any frontend code
 
 ## Installation
 
@@ -144,6 +145,28 @@ echo "what is AI" | moss query my-index
 # JSON output for scripting
 moss query my-index "query" --json | jq '.docs[0].text'
 ```
+
+### Playground
+
+Start a local web UI for interactive semantic search — no frontend code required.
+
+```bash
+# Start the playground on the default port (8765)
+moss playground
+
+# Specify a custom port
+moss playground --port 9000
+
+# Skip opening the browser automatically
+moss playground --no-open
+```
+
+The playground serves a single-page app at `http://localhost:<port>` that lets you:
+
+- Browse and load indexes
+- Run semantic search with configurable `topK` and `alpha`
+- View results with scores and metadata
+- All API calls are proxied through the server — your project key is never exposed to the browser
 
 ### Job Tracking
 
