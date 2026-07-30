@@ -189,8 +189,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         try:
-            indexes = worker.submit(lambda: client.list_indexes())
-            self._send_json(200, {"indexes": [_index_info_to_dict(i) for i in indexes]})
+            indexes = worker.submit(lambda: [_index_info_to_dict(i) for i in client.list_indexes()])
+            self._send_json(200, {"indexes": indexes})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
@@ -204,8 +204,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' query parameter"})
             return
         try:
-            info = worker.submit(lambda: client.get_index(name))
-            self._send_json(200, {"index": _index_info_to_dict(info)})
+            info = worker.submit(lambda: _index_info_to_dict(client.get_index(name)))
+            self._send_json(200, {"index": info})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
@@ -287,20 +287,17 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            result = worker.submit(lambda: client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha)))
-            docs = []
-            for d in result.docs:
-                docs.append({
-                    "id": d.id,
-                    "text": d.text,
-                    "score": d.score,
-                    "metadata": d.metadata,
-                })
-            self._send_json(200, {
-                "docs": docs,
-                "timeTakenMs": result.time_taken_ms,
-                "query": result.query,
-            })
+            def _build_result(r):
+                return {
+                    "docs": [
+                        {"id": d.id, "text": d.text, "score": d.score, "metadata": d.metadata}
+                        for d in r.docs
+                    ],
+                    "timeTakenMs": r.time_taken_ms,
+                    "query": r.query,
+                }
+            payload = worker.submit(lambda: _build_result(client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha))))
+            self._send_json(200, payload)
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
