@@ -189,7 +189,12 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         try:
-            indexes = worker.submit(lambda: [_index_info_to_dict(i) for i in client.list_indexes()])
+            async def _call():
+                indexes = client.list_indexes()
+                if inspect.isawaitable(indexes):
+                    indexes = await indexes
+                return [_index_info_to_dict(i) for i in indexes]
+            indexes = worker.submit(_call)
             self._send_json(200, {"indexes": indexes})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -204,7 +209,12 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' query parameter"})
             return
         try:
-            info = worker.submit(lambda: _index_info_to_dict(client.get_index(name)))
+            async def _call():
+                result = client.get_index(name)
+                if inspect.isawaitable(result):
+                    result = await result
+                return _index_info_to_dict(result)
+            info = worker.submit(_call)
             self._send_json(200, {"index": info})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -296,7 +306,12 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
                     "timeTakenMs": r.time_taken_ms,
                     "query": r.query,
                 }
-            payload = worker.submit(lambda: _build_result(client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha))))
+            async def _call():
+                result = client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha))
+                if inspect.isawaitable(result):
+                    result = await result
+                return _build_result(result)
+            payload = worker.submit(_call)
             self._send_json(200, payload)
         except Exception as e:
             self._send_json(500, {"error": str(e)})
