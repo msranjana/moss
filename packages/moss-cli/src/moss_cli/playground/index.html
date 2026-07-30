@@ -168,7 +168,7 @@ async function refreshIndexList() {
       throw new Error(err.error || 'Failed to fetch indexes');
     }
     const data = await res.json();
-    idxs = data.indexes || [];
+    indexes = data.indexes || [];
   } catch (e) {
     console.error('fetchIndexes failed:', e);
     select.innerHTML = '<option value="">Error loading indexes</option>';
@@ -182,12 +182,12 @@ async function refreshIndexList() {
     return;
   }
   select.innerHTML = '';
-  if (idxs.length === 0) {
+  if (indexes.length === 0) {
     select.innerHTML = '<option value="">No indexes found</option>';
     loadBtn.disabled = true;
     return;
   }
-  idxs.forEach(idx => {
+  indexes.forEach(idx => {
     const opt = document.createElement('option');
     opt.value = idx.name;
     const status = idx.status === 'Ready' ? '' : ` (${idx.status})`;
@@ -264,6 +264,11 @@ async function loadIndex() {
     }
     if (loadReqId !== requestId || select.value !== name) return;
     currentIndex = name;
+    results.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<p>Type a query to search</p>';
+    results.appendChild(empty);
     updateLoadBtn();
     searchInput.focus();
   } catch (e) {
@@ -387,6 +392,11 @@ function handleSearch(e) {
 select.addEventListener('change', () => {
   ++requestId;
   if (searchTimeout) clearTimeout(searchTimeout);
+  results.innerHTML = '';
+  const empty = document.createElement('div');
+  empty.className = 'empty-state';
+  empty.innerHTML = '<p>Load this index and type a query to search</p>';
+  results.appendChild(empty);
   updateLoadBtn();
   const name = select.value;
   const idx = indexes.find(i => i.name === name);
