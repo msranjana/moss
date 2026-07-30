@@ -73,9 +73,10 @@ class AsyncWorker:
         future = asyncio.run_coroutine_threadsafe(runner(), self._loop)
         return future.result()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float | None = 5.0) -> bool:
         self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join()
+        self._thread.join(timeout)
+        return self._thread.is_alive()
 
 
 def _index_info_to_dict(info: Any) -> Dict[str, Any]:
@@ -286,8 +287,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            opts = QueryOptions(top_k=top_k, alpha=alpha)
-            result = worker.submit(lambda: client.query(name, query, opts))
+            result = worker.submit(lambda: client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha)))
             docs = []
             for d in result.docs:
                 docs.append({
@@ -347,9 +347,9 @@ def playground_command(
         raise typer.Exit(1)
 
     # Initialize the SDK client for API endpoints
-    client = MossClient(pid, pkey)
     worker = AsyncWorker()
-
+    client = worker.submit(lambda: MossClient(pid, pkey))
+    
     # Start server
     final_port = port if port else _find_free_port()
     server_addr = ("127.0.0.1", final_port)
@@ -384,4 +384,5 @@ def playground_command(
         console.print("\n[yellow]Shutting down...[/yellow]")
     finally:
         server.server_close()
-        worker.stop()
+        if worker.stop():
+            console.print("[yellow]Worker thread did not shut down gracefully within timeout[/yellow]")
