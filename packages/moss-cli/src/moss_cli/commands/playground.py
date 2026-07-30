@@ -15,7 +15,7 @@ import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse, parse_qs
 
 import typer
@@ -37,6 +37,13 @@ class AsyncWorker:
     All MossClient calls are submitted here so they execute serially on
     one loop/thread — safe even when multiple HTTP handler threads are
     active (ThreadingHTTPServer).
+
+    `submit` takes a zero-arg callable rather than an already-constructed
+    coroutine. This ensures the coroutine object itself is *constructed*
+    on the worker's event loop (inside `runner`), not on the calling
+    (HTTP handler) thread. Some async SDK/PyO3 objects bind to "the
+    currently running loop" at construction time, so constructing them
+    off-thread and only awaiting them here would still be unsafe.
     """
 
     def __init__(self) -> None:
@@ -48,8 +55,20 @@ class AsyncWorker:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def submit(self, coro) -> Any:
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+    def submit(self, coro_fn: Callable[[], Any]) -> Any:
+        """Run coro_fn() entirely on the worker loop/thread and return its result.
+
+        coro_fn must be a zero-arg callable. It may return an awaitable
+        (coroutine/Future) or a plain value — either is handled.
+        """
+
+        async def runner():
+            result = coro_fn()
+            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+                return await result
+            return result
+
+        future = asyncio.run_coroutine_threadsafe(runner(), self._loop)
         return future.result()
 
     def stop(self) -> None:
@@ -153,7 +172,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(500, {"error": "MossClient not initialized"})
             return
         try:
-            indexes = worker.submit(client.list_indexes())
+            indexes = worker.submit(lambda: client.list_indexes())
             self._send_json(200, {"indexes": [_index_info_to_dict(i) for i in indexes]})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -168,7 +187,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' query parameter"})
             return
         try:
-            info = worker.submit(client.get_index(name))
+            info = worker.submit(lambda: client.get_index(name))
             self._send_json(200, {"index": _index_info_to_dict(info)})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -187,8 +206,17 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
-        data = json.loads(body)
+        raw_body = self.rfile.read(length) if length else b"{}"
+
+        try:
+            data = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Invalid JSON body"})
+            return
+
+        if not isinstance(data, dict):
+            self._send_json(400, {"error": "Request body must be a JSON object"})
+            return
 
         if path == "/api/load-index":
             self._handle_post_load_index(data)
@@ -208,7 +236,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' in request body"})
             return
         try:
-            worker.submit(client.load_index(name))
+            worker.submit(lambda: client.load_index(name))
             self._send_json(200, {"name": name})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -224,21 +252,26 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         if not name or not query:
             self._send_json(400, {"error": "Missing 'name' or 'query' in request body"})
             return
-        top_k = data.get("topK")
-        alpha = data.get("alpha")
-        if top_k is not None:
-            top_k = int(top_k)
-            if top_k < 1 or top_k > 50:
-                self._send_json(400, {"error": "topK must be between 1 and 50"})
-                return
-        if alpha is not None:
-            alpha = float(alpha)
-            if alpha < 0 or alpha > 1:
-                self._send_json(400, {"error": "alpha must be between 0 and 1"})
-                return
+
+        try:
+            raw_top_k = data.get("topK")
+            raw_alpha = data.get("alpha")
+            top_k = int(raw_top_k) if raw_top_k is not None else None
+            alpha = float(raw_alpha) if raw_alpha is not None else None
+        except (TypeError, ValueError):
+            self._send_json(400, {"error": "'topK' must be an integer and 'alpha' must be a number"})
+            return
+
+        if top_k is not None and (top_k < 1 or top_k > 50):
+            self._send_json(400, {"error": "topK must be between 1 and 50"})
+            return
+        if alpha is not None and (alpha < 0 or alpha > 1):
+            self._send_json(400, {"error": "alpha must be between 0 and 1"})
+            return
+
         try:
             opts = QueryOptions(top_k=top_k, alpha=alpha)
-            result = worker.submit(client.query(name, query, opts))
+            result = worker.submit(lambda: client.query(name, query, opts))
             docs = []
             for d in result.docs:
                 docs.append({
