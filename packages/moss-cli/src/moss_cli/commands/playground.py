@@ -49,11 +49,12 @@ class AsyncWorker:
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
-        self._lock = asyncio.run_coroutine_threadsafe(
-            asyncio.Lock(), self._loop
-        ).result()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        self._lock = asyncio.run_coroutine_threadsafe(self._make_lock(), self._loop).result()
+
+    async def _make_lock(self) -> asyncio.Lock:
+        return asyncio.Lock()
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
