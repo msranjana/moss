@@ -8,6 +8,7 @@ MossClient — the project key never reaches the browser.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import secrets
 import socket
@@ -58,13 +59,14 @@ class AsyncWorker:
     def submit(self, coro_fn: Callable[[], Any]) -> Any:
         """Run coro_fn() entirely on the worker loop/thread and return its result.
 
-        coro_fn must be a zero-arg callable. It may return an awaitable
-        (coroutine/Future) or a plain value — either is handled.
+        coro_fn must be a zero-arg callable. It may return any awaitable
+        object (coroutine, Future, or a custom __await__-based object)
+        or a plain value — either is handled.
         """
 
         async def runner():
             result = coro_fn()
-            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+            if inspect.isawaitable(result):
                 return await result
             return result
 
@@ -90,6 +92,20 @@ def _index_info_to_dict(info: Any) -> Dict[str, Any]:
         "updatedAt": getattr(info, "updated_at", ""),
         "model": model_dict,
     }
+
+
+class DaemonThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer whose per-request threads are daemons.
+
+    By default ThreadingHTTPServer's request threads are non-daemon, so
+    server_close() blocks waiting for any in-flight request thread to
+    finish. If a handler is parked in worker.submit(...) (e.g. a slow
+    /api/query) when the user hits Ctrl+C, shutdown would hang before
+    worker.stop() ever runs. Daemonizing request threads lets process
+    exit proceed without waiting on them.
+    """
+
+    daemon_threads = True
 
 
 class PlaygroundHandler(SimpleHTTPRequestHandler):
@@ -343,7 +359,7 @@ def playground_command(
     PlaygroundHandler._token = secrets.token_urlsafe(32)
     PlaygroundHandler._server_host = f"127.0.0.1:{final_port}"
 
-    server = ThreadingHTTPServer(server_addr, PlaygroundHandler)
+    server = DaemonThreadingHTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
     frag_url = f"{url}/#{PlaygroundHandler._token}"
 
@@ -366,5 +382,6 @@ def playground_command(
         server.serve_forever()
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
+    finally:
         server.server_close()
         worker.stop()
