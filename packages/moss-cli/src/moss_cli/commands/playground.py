@@ -12,7 +12,7 @@ import json
 import secrets
 import socket
 import webbrowser
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, parse_qs
@@ -194,6 +194,16 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             return
         top_k = data.get("topK")
         alpha = data.get("alpha")
+        if top_k is not None:
+            top_k = int(top_k)
+            if top_k < 1 or top_k > 50:
+                self._send_json(400, {"error": "topK must be between 1 and 50"})
+                return
+        if alpha is not None:
+            alpha = float(alpha)
+            if alpha < 0 or alpha > 1:
+                self._send_json(400, {"error": "alpha must be between 0 and 1"})
+                return
         try:
             opts = QueryOptions(top_k=top_k, alpha=alpha)
             result = asyncio.run(client.query(name, query, opts))
@@ -266,7 +276,7 @@ def playground_command(
     PlaygroundHandler._token = secrets.token_urlsafe(32)
     PlaygroundHandler._server_host = f"127.0.0.1:{final_port}"
 
-    server = HTTPServer(server_addr, PlaygroundHandler)
+    server = ThreadingHTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
     frag_url = f"{url}/#{PlaygroundHandler._token}"
 
