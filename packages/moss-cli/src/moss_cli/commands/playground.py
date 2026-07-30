@@ -281,7 +281,7 @@ def playground_command(
     if not no_open:
         opened = webbrowser.open(frag_url)
     if not opened:
-        console.print(f"  [yellow]Open this URL in your browser:[/yellow]")
+        console.print("  [yellow]Open this URL in your browser:[/yellow]")
         console.print(f"  [cyan]{frag_url}[/cyan]")
         console.print()
 
