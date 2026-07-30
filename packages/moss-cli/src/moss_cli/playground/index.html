@@ -296,11 +296,18 @@ function renderResults(searchResults) {
 
   const summary = document.createElement('div');
   summary.className = 'results-summary';
+
+  const countSpan = document.createElement('span');
+  countSpan.textContent = `${searchResults.docs.length} result(s)`;
+  summary.appendChild(countSpan);
+
   const timeMs = searchResults.timeTakenMs;
-  summary.innerHTML = `
-    <span>${searchResults.docs.length} result(s)</span>
-    ${timeMs != null ? `<span>${timeMs} ms</span>` : ''}
-  `;
+  if (typeof timeMs === 'number' && Number.isFinite(timeMs)) {
+    const timeSpan = document.createElement('span');
+    timeSpan.textContent = `${timeMs} ms`;
+    summary.appendChild(timeSpan);
+}
+
   results.appendChild(summary);
 
   searchResults.docs.forEach(doc => {
