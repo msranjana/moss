@@ -151,22 +151,32 @@ moss query my-index "query" --json | jq '.docs[0].text'
 Start a local web UI for interactive semantic search — no frontend code required.
 
 ```bash
-# Start the playground on the default port (8765)
+# Start the playground (port 8765 when available, otherwise the next free port)
 moss playground
 
-# Specify a custom port
+# Use a specific port
 moss playground --port 9000
+
+# Use a specific credential profile
+moss playground --profile staging
 
 # Skip opening the browser automatically
 moss playground --no-open
 ```
 
-The playground serves a single-page app at `http://localhost:<port>` that lets you:
+When you run `moss playground`, it prints a URL that includes a per-run token in the
+`#<token>` fragment, e.g. `http://127.0.0.1:8765/#Abc123...`. Open that exact URL in
+your browser. With `--no-open`, copy the full URL printed by the command — including
+the `#<token>` fragment — since the token is required to authenticate API requests.
+
+The playground serves a single-page app that lets you:
 
 - Browse and load indexes
 - Run semantic search with configurable `topK` and `alpha`
 - View results with scores and metadata
-- All API calls are proxied through the server — your project key is never exposed to the browser
+
+All API calls are proxied through the server, so your project key is never exposed
+to the browser.
 
 ### Job Tracking
 

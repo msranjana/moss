@@ -52,7 +52,7 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 .search-icon{padding:0 4px 0 10px;color:var(--text2);display:flex}
 .index-select{display:flex;gap:8px;margin-bottom:16px}
 .index-select select{flex:1}
-.index-info{font-size:12px;color:var(--text2);margin-bottom:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;font-family:var(--mono);word-break:break-all;line-height:1.6}
+.index-info{font-size:12px;color:var(--text2);margin-bottom:12px;padding:8px 10px;background:var(--surface2);border-radius:6px;font-family:var(--mono);word-break:break-all;line-height:1.6;white-space:pre-wrap}
 .index-info strong{color:var(--text)}
 .results-summary{font-size:12px;color:var(--text2);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
 .result-item{padding:12px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;transition:border-color .15s}
@@ -86,7 +86,7 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
         <div class="panel">
           <div class="panel-title">Index</div>
           <div class="index-select">
-            <select id="index-select">
+            <select id="index-select" aria-label="Select an index">
               <option value="">Loading indexes...</option>
             </select>
           </div>
@@ -108,7 +108,7 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
                 <span class="search-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                 </span>
-                <input type="text" id="search-input" placeholder="Type to search..." disabled />
+                <input type="text" id="search-input" placeholder="Type to search..." disabled aria-label="Search query" />
               </div>
             </form>
           </div>
@@ -118,7 +118,7 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
               <label>Top K <input type="number" id="topk-input" min="1" max="50" value="5" disabled /></label>
               <div class="range-wrap">
                 <span>Keyword</span>
-                <input type="range" id="alpha-slider" min="0" max="1" step="0.05" value="0.5" disabled />
+                <input type="range" id="alpha-slider" min="0" max="1" step="0.05" value="0.5" disabled aria-label="Keyword vs semantic balance" />
                 <span>Semantic</span>
                 <span class="alpha-value" id="alpha-display">&alpha; 0.50</span>
               </div>
@@ -139,16 +139,34 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 
 <script type="module">
 const mossToken = location.hash.replace(/^#/, '') || '';
+if (mossToken) history.replaceState(null, '', location.pathname + location.search);
+
+const sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 function apiFetch(path, options = {}) {
   const headers = { ...options.headers, 'X-Moss-Token': mossToken };
   return fetch(path, { ...options, headers });
 }
 
+async function errorFromResponse(res, fallback) {
+  let message = fallback;
+  try {
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (parsed && typeof parsed.error === 'string' && parsed.error) {
+      message = parsed.error;
+    }
+  } catch (_) {}
+  return new Error(`${message} (HTTP ${res.status})`);
+}
+
 let indexes = [];
 let currentIndex = null;
 let requestId = 0;
 let searchAbort = null;
+let searchTimeout = null;
 
 const $ = id => document.getElementById(id);
 const select = $('index-select');
@@ -168,8 +186,7 @@ async function refreshIndexList() {
   try {
     const res = await apiFetch('/api/indexes');
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to fetch indexes');
+      throw await errorFromResponse(res, 'Failed to fetch indexes');
     }
     const data = await res.json();
     indexes = data.indexes || [];
@@ -265,8 +282,7 @@ async function loadIndex() {
       body: JSON.stringify({ name }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to load index');
+      throw await errorFromResponse(res, 'Failed to load index');
     }
     if (loadReqId !== requestId || select.value !== name) return;
     currentIndex = name;
@@ -359,14 +375,6 @@ function renderResults(searchResults) {
   });
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-let searchTimeout = null;
-
 function handleSearch(e) {
   if (e) e.preventDefault();
   if (!currentIndex) return;
@@ -386,8 +394,10 @@ function handleSearch(e) {
   }
 
   const rawTopK = topkInput.value.trim();
-  const parsedTopK = Number(rawTopK);
-  const topK = rawTopK === '' || Number.isNaN(parsedTopK) ? 5 : parsedTopK;
+  const parsedTopK = Math.round(Number(rawTopK));
+  const topK = rawTopK === '' || Number.isNaN(parsedTopK)
+    ? 5
+    : Math.min(50, Math.max(1, parsedTopK));
   const parsedAlpha = parseFloat(alphaSlider.value);
   const alpha = Number.isNaN(parsedAlpha) ? 0.5 : parsedAlpha;
 
@@ -406,11 +416,10 @@ function handleSearch(e) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: thisAbort.signal,
-        body: JSON.stringify({ name: idx, query, topK, alpha, requestId: thisRequestId }),
+        body: JSON.stringify({ name: idx, query, topK, alpha, requestId: thisRequestId, sessionId }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Query failed');
+        throw await errorFromResponse(res, 'Query failed');
       }
       const searchResults = await res.json();
       if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
@@ -418,7 +427,11 @@ function handleSearch(e) {
     } catch (e) {
       if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
       console.error('Query failed:', e);
-      results.innerHTML = `<div class="status-box status-error">Query failed: ${escapeHtml(e.message || e)}</div>`;
+      results.innerHTML = '';
+      const status = document.createElement('div');
+      status.className = 'status-box status-error';
+      status.textContent = `Query failed: ${e.message || e}`;
+      results.appendChild(status);
     }
   }, 150);
 }
@@ -454,7 +467,16 @@ alphaSlider.addEventListener('input', () => {
   if (currentIndex && searchInput.value.trim()) handleSearch();
 });
 
-refreshIndexList();
+if (!mossToken) {
+  select.innerHTML = '<option value="">Missing token</option>';
+  loadBtn.disabled = true;
+  const status = document.createElement('div');
+  status.className = 'status-box status-error';
+  status.textContent = 'No token found in the URL. Re-open the playground from the address printed by `moss playground`.';
+  select.parentElement.appendChild(status);
+} else {
+  refreshIndexList();
+}
 </script>
 </body>
 </html>

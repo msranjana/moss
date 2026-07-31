@@ -22,6 +22,7 @@ from urllib.parse import urlparse, parse_qs
 
 import typer
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 from moss import MossClient, QueryOptions
 
@@ -31,6 +32,8 @@ console = Console()
 HERE = Path(__file__).resolve().parent.parent
 
 PLAYGROUND_HTML = HERE / "playground" / "index.html"
+
+MAX_REQUEST_BODY_SIZE = 1 << 20
 
 
 class AsyncWorker:
@@ -82,7 +85,7 @@ class AsyncWorker:
     def stop(self, timeout: float | None = 5.0) -> bool:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout)
-        return self._thread.is_alive()
+        return not self._thread.is_alive()
 
 
 def _index_info_to_dict(info: Any) -> Dict[str, Any]:
@@ -123,14 +126,15 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
     _token: str = ""
     _server_host: str = ""
     _worker: AsyncWorker | None = None
-    _latest_request_id: int = 0
+    _latest_request_ids: Dict[str, int] = {}
     _request_lock = threading.Lock()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
 
     def _check_api_request(self) -> bool:
-        if self.headers.get("X-Moss-Token") != self._token:
+        token = self.headers.get("X-Moss-Token")
+        if token is None or not secrets.compare_digest(token, self._token):
             self._send_json(403, {"error": "Forbidden: invalid or missing token"})
             return False
         host = self.headers.get("Host", "")
@@ -160,6 +164,17 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _require_string_field(self, data: dict, key: str, message: str) -> str | None:
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            self._send_json(400, {"error": message})
+            return None
+        return value
+
+    def _send_error(self, exc: Exception) -> None:
+        console.print(f"[red]Playground error:[/red] {rich_escape(f'{type(exc).__name__}: {exc}')}")
+        self._send_json(500, {"error": "Internal server error"})
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -205,7 +220,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             indexes = worker.submit(_call)
             self._send_json(200, {"indexes": indexes})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_error(e)
 
     def _handle_get_index(self, name: str | None) -> None:
         client = self.client
@@ -225,22 +240,37 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             info = worker.submit(_call)
             self._send_json(200, {"index": info})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_error(e)
 
     def log_message(self, format, *args):
-        if len(args) >= 3:
-            console.print(f"  [dim]{args[0]} {args[1]} {args[2]}[/dim]")
-        elif len(args) >= 2:
-            console.print(f"  [dim]{args[0]} {args[1]}[/dim]")
-        elif len(args) >= 1:
-            console.print(f"  [dim]{args[0]}[/dim]")
+        safe = [rich_escape(str(a)) for a in args]
+        if len(safe) >= 3:
+            console.print(f"  [dim]{safe[0]} {safe[1]} {safe[2]}[/dim]")
+        elif len(safe) >= 2:
+            console.print(f"  [dim]{safe[0]} {safe[1]}[/dim]")
+        elif len(safe) >= 1:
+            console.print(f"  [dim]{safe[0]}[/dim]")
 
     def do_POST(self) -> None:
         if not self._check_api_request():
             return
         parsed = urlparse(self.path)
         path = parsed.path
-        length = int(self.headers.get("Content-Length", 0))
+        length_header = self.headers.get("Content-Length")
+        if length_header is None:
+            length = 0
+        else:
+            try:
+                length = int(length_header)
+            except ValueError:
+                self._send_json(400, {"error": "Invalid Content-Length header"})
+                return
+            if length < 0:
+                self._send_json(400, {"error": "Invalid Content-Length header"})
+                return
+            if length > MAX_REQUEST_BODY_SIZE:
+                self._send_json(413, {"error": "Request body too large"})
+                return
         raw_body = self.rfile.read(length) if length else b"{}"
 
         try:
@@ -266,15 +296,14 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
-        name = data.get("name", "")
-        if not name:
-            self._send_json(400, {"error": "Missing 'name' in request body"})
+        name = self._require_string_field(data, "name", "Missing 'name' in request body")
+        if name is None:
             return
         try:
             worker.submit(lambda: client.load_index(name))
             self._send_json(200, {"name": name})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_error(e)
 
     def _handle_post_query(self, data: dict) -> None:
         client = self.client
@@ -282,10 +311,16 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         if client is None or worker is None:
             self._send_json(500, {"error": "MossClient not initialized"})
             return
-        name = data.get("name", "")
-        query = data.get("query", "")
-        if not name or not query:
-            self._send_json(400, {"error": "Missing 'name' or 'query' in request body"})
+        name = self._require_string_field(data, "name", "Missing 'name' or 'query' in request body")
+        if name is None:
+            return
+        query = self._require_string_field(data, "query", "Missing 'name' or 'query' in request body")
+        if query is None:
+            return
+
+        session_id = data.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            self._send_json(400, {"error": "Missing or invalid 'sessionId'"})
             return
 
         raw_request_id = data.get("requestId")
@@ -322,10 +357,11 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             return
 
         with PlaygroundHandler._request_lock:
-            if raw_request_id < PlaygroundHandler._latest_request_id:
+            latest = PlaygroundHandler._latest_request_ids.get(session_id, 0)
+            if raw_request_id < latest:
                 self._send_json(200, {"docs": [], "timeTakenMs": 0, "query": query, "superseded": True})
                 return
-            PlaygroundHandler._latest_request_id = raw_request_id
+            PlaygroundHandler._latest_request_ids[session_id] = raw_request_id
 
         try:
             def _build_result(r):
@@ -338,7 +374,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
                     "query": r.query,
                 }
             async def _call():
-                if raw_request_id < PlaygroundHandler._latest_request_id:
+                if raw_request_id < PlaygroundHandler._latest_request_ids.get(session_id, 0):
                     return {"docs": [], "timeTakenMs": 0, "query": query, "superseded": True}
                 result = client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha))
                 if inspect.isawaitable(result):
@@ -347,7 +383,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             payload = worker.submit(_call)
             self._send_json(200, payload)
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_error(e)
 
 
 def _find_free_port(start: int = 8765, max_attempts: int = 20) -> int:
@@ -383,13 +419,6 @@ def playground_command(
     pid, pkey = resolve_credentials(
         ctx.obj.get("project_id"), ctx.obj.get("project_key"), ctx.obj.get("profile")
     )
-
-    if not pid or not pkey:
-        console.print(
-            "[red]No credentials found.[/red] Run [bold]moss init[/bold] first "
-            "or set MOSS_PROJECT_ID and MOSS_PROJECT_KEY."
-        )
-        raise typer.Exit(1)
 
     # Initialize the SDK client for API endpoints
     worker = AsyncWorker()
@@ -429,5 +458,5 @@ def playground_command(
         console.print("\n[yellow]Shutting down...[/yellow]")
     finally:
         server.server_close()
-        if worker.stop():
+        if not worker.stop():
             console.print("[yellow]Worker thread did not shut down gracefully within timeout[/yellow]")
