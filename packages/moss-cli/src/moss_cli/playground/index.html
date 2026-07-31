@@ -67,6 +67,9 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 .empty-state p{font-size:13px}
 .hidden{display:none!important}
 .result-timestamp{font-size:10px;color:var(--text2);opacity:.5}
+.result-metadata{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
+.result-metadata summary{font-size:11px;color:var(--text2);cursor:pointer;user-select:none}
+.result-metadata pre{margin-top:6px;font-size:11px;color:var(--text2);background:var(--surface2);padding:8px;border-radius:6px;overflow-x:auto;font-family:var(--mono);line-height:1.5;white-space:pre-wrap;word-break:break-word}
 </style>
 </head>
 <body>
@@ -145,6 +148,7 @@ function apiFetch(path, options = {}) {
 let indexes = [];
 let currentIndex = null;
 let requestId = 0;
+let searchAbort = null;
 
 const $ = id => document.getElementById(id);
 const select = $('index-select');
@@ -244,6 +248,8 @@ async function loadIndex() {
 
   const loadReqId = ++requestId;
   if (searchTimeout) clearTimeout(searchTimeout);
+  if (searchAbort) searchAbort.abort();
+  searchAbort = null;
   select.disabled = true;
 
   loadBtn.disabled = true;
@@ -337,6 +343,18 @@ function renderResults(searchResults) {
     textDiv.textContent = doc.text;
     item.appendChild(textDiv);
 
+    if (doc.metadata && typeof doc.metadata === 'object' && Object.keys(doc.metadata).length > 0) {
+      const details = document.createElement('details');
+      details.className = 'result-metadata';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Metadata';
+      details.appendChild(summary);
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(doc.metadata, null, 2);
+      details.appendChild(pre);
+      item.appendChild(details);
+    }
+
     results.appendChild(item);
   });
 }
@@ -355,6 +373,10 @@ function handleSearch(e) {
 
   const query = searchInput.value.trim();
   if (!query) {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    if (searchAbort) searchAbort.abort();
+    searchAbort = null;
+    ++requestId;
     results.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -363,13 +385,17 @@ function handleSearch(e) {
     return;
   }
 
-  const parsedTopK = parseInt(topkInput.value, 10);
-  const topK = Number.isNaN(parsedTopK) ? 5 : parsedTopK;
+  const rawTopK = topkInput.value.trim();
+  const parsedTopK = Number(rawTopK);
+  const topK = rawTopK === '' || Number.isNaN(parsedTopK) ? 5 : parsedTopK;
   const parsedAlpha = parseFloat(alphaSlider.value);
   const alpha = Number.isNaN(parsedAlpha) ? 0.5 : parsedAlpha;
 
   if (searchTimeout) clearTimeout(searchTimeout);
   const thisRequestId = ++requestId;
+  if (searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
+  const thisAbort = searchAbort;
   const idx = currentIndex;
   searchTimeout = setTimeout(async () => {
     const placeholder = results.querySelector('.empty-state');
@@ -379,17 +405,18 @@ function handleSearch(e) {
       const res = await apiFetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: idx, query, topK, alpha }),
+        signal: thisAbort.signal,
+        body: JSON.stringify({ name: idx, query, topK, alpha, requestId: thisRequestId }),
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || 'Query failed');
       }
       const searchResults = await res.json();
-      if (thisRequestId !== requestId) return;
+      if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
       renderResults(searchResults);
     } catch (e) {
-      if (thisRequestId !== requestId) return;
+      if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
       console.error('Query failed:', e);
       results.innerHTML = `<div class="status-box status-error">Query failed: ${escapeHtml(e.message || e)}</div>`;
     }
@@ -399,6 +426,8 @@ function handleSearch(e) {
 select.addEventListener('change', () => {
   ++requestId;
   if (searchTimeout) clearTimeout(searchTimeout);
+  if (searchAbort) searchAbort.abort();
+  searchAbort = null;
   results.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'empty-state';

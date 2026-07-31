@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import secrets
 import socket
 import threading
@@ -122,6 +123,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
     _token: str = ""
     _server_host: str = ""
     _worker: AsyncWorker | None = None
+    _latest_request_id: int = 0
+    _request_lock = threading.Lock()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
@@ -285,14 +288,31 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"error": "Missing 'name' or 'query' in request body"})
             return
 
-        try:
-            raw_top_k = data.get("topK")
-            raw_alpha = data.get("alpha")
-            top_k = int(raw_top_k) if raw_top_k is not None else None
-            alpha = float(raw_alpha) if raw_alpha is not None else None
-        except (TypeError, ValueError):
-            self._send_json(400, {"error": "'topK' must be an integer and 'alpha' must be a number"})
+        raw_request_id = data.get("requestId")
+        if isinstance(raw_request_id, bool) or not isinstance(raw_request_id, int):
+            self._send_json(400, {"error": "Missing or invalid 'requestId'"})
             return
+
+        raw_top_k = data.get("topK")
+        if raw_top_k is not None:
+            if isinstance(raw_top_k, bool) or not isinstance(raw_top_k, int):
+                self._send_json(400, {"error": "'topK' must be an integer"})
+                return
+            top_k = raw_top_k
+        else:
+            top_k = None
+
+        raw_alpha = data.get("alpha")
+        if raw_alpha is not None:
+            if isinstance(raw_alpha, bool) or not isinstance(raw_alpha, (int, float)):
+                self._send_json(400, {"error": "'alpha' must be a number"})
+                return
+            alpha = float(raw_alpha)
+            if not math.isfinite(alpha):
+                self._send_json(400, {"error": "'alpha' must be a finite number"})
+                return
+        else:
+            alpha = None
 
         if top_k is not None and (top_k < 1 or top_k > 50):
             self._send_json(400, {"error": "topK must be between 1 and 50"})
@@ -300,6 +320,12 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         if alpha is not None and (alpha < 0 or alpha > 1):
             self._send_json(400, {"error": "alpha must be between 0 and 1"})
             return
+
+        with PlaygroundHandler._request_lock:
+            if raw_request_id < PlaygroundHandler._latest_request_id:
+                self._send_json(200, {"docs": [], "timeTakenMs": 0, "query": query, "superseded": True})
+                return
+            PlaygroundHandler._latest_request_id = raw_request_id
 
         try:
             def _build_result(r):
@@ -312,6 +338,8 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
                     "query": r.query,
                 }
             async def _call():
+                if raw_request_id < PlaygroundHandler._latest_request_id:
+                    return {"docs": [], "timeTakenMs": 0, "query": query, "superseded": True}
                 result = client.query(name, query, QueryOptions(top_k=top_k, alpha=alpha))
                 if inspect.isawaitable(result):
                     result = await result
