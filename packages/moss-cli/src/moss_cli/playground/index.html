@@ -138,8 +138,12 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 </div>
 
 <script type="module">
-const mossToken = location.hash.replace(/^#/, '') || '';
-if (mossToken) history.replaceState(null, '', location.pathname + location.search);
+const tokenFromHash = location.hash.replace(/^#/, '');
+const mossToken = tokenFromHash || sessionStorage.getItem('mossToken') || '';
+if (tokenFromHash) {
+  sessionStorage.setItem('mossToken', tokenFromHash);
+  history.replaceState(null, '', location.pathname + location.search);
+}
 
 const sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
