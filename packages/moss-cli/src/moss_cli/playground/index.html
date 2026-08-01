@@ -18,7 +18,7 @@ header p{color:var(--text2);font-size:13px;margin-top:4px}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
 .panel-title{font-size:15px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
 label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:4px}
-select,input[type=text],input[type=number]{width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color .15s}
+select,input[type=text],input[type=password],input[type=number]{width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color .15s}
 select:focus,input:focus{border-color:var(--primary)}
 select option{background:var(--surface2);color:var(--text)}
 input[type=number]{width:72px}
@@ -32,6 +32,8 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 .btn-secondary:disabled{opacity:.4;cursor:not-allowed}
 .btn-success{background:var(--success);color:#fff}
 .btn-success:disabled{opacity:.4;cursor:not-allowed}
+.link-btn{background:none;border:none;color:var(--text2);font-size:12px;cursor:pointer;text-decoration:underline;padding:0;font-family:var(--font)}
+.link-btn:hover{color:var(--primary)}
 .spinner{animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .controls{margin-bottom:16px}
@@ -70,21 +72,50 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
 .result-metadata{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
 .result-metadata summary{font-size:11px;color:var(--text2);cursor:pointer;user-select:none}
 .result-metadata pre{margin-top:6px;font-size:11px;color:var(--text2);background:var(--surface2);padding:8px;border-radius:6px;overflow-x:auto;font-family:var(--mono);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.connect-panel{max-width:460px;margin:0 auto}
+.connect-panel .field{margin-bottom:14px}
+.connect-panel p.hint{font-size:12px;color:var(--text2);margin-bottom:16px}
 </style>
 </head>
 <body>
 <div class="container" id="app">
   <header>
     <h1>Moss <span>Playground</span></h1>
-    <p>Load an index, run queries, and inspect results &mdash; all proxied through your local server</p>
+    <p>Load an index and run searches entirely in your browser via <code>@moss-dev/moss-web</code> (WASM)</p>
   </header>
 
-  <div id="main-panel">
+  <!-- Connection (manual fallback when the server has no credentials) -->
+  <div id="connect-panel" class="panel connect-panel">
+    <div class="panel-title">Connect to Moss</div>
+    <p class="hint">
+      The server did not provide credentials. Enter your Project ID and Project Key to connect
+      directly to the Moss cloud. They are kept in this browser tab only.
+    </p>
+    <form id="connect-form" autocomplete="off">
+      <div class="field">
+        <label for="pid-input">Project ID</label>
+        <input type="text" id="pid-input" placeholder="moss-project-id" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="pkey-input">Project Key</label>
+        <input type="password" id="pkey-input" placeholder="moss-project-key" autocomplete="off" />
+      </div>
+      <button type="submit" id="connect-btn" class="btn btn-primary" style="width:100%;justify-content:center">
+        Connect
+      </button>
+    </form>
+    <div id="connect-status" class="hidden"></div>
+  </div>
+
+  <div id="main-panel" class="hidden">
     <div class="grid">
       <!-- Left: Index Selection -->
       <div>
         <div class="panel">
-          <div class="panel-title">Index</div>
+          <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Index</span>
+            <button class="link-btn" id="change-conn-btn" type="button">Change connection</button>
+          </div>
           <div class="index-select">
             <select id="index-select" aria-label="Select an index">
               <option value="">Loading indexes...</option>
@@ -137,6 +168,16 @@ input[type=range]{width:100%;accent-color:var(--primary);height:4px;cursor:point
   </div>
 </div>
 
+<script type="importmap">
+{
+  "imports": {
+    "@moss-dev/moss-web": "https://unpkg.com/@moss-dev/moss-web@1.0.0/dist/index.js",
+    "@moss-dev/moss-wasm": "https://unpkg.com/@moss-dev/moss-wasm@0.10.0/moss_wasm.js",
+    "onnxruntime-web": "https://unpkg.com/onnxruntime-web@1.21.0/dist/ort.bundle.min.mjs"
+  }
+}
+</script>
+
 <script type="module">
 const tokenFromHash = location.hash.replace(/^#/, '');
 const mossToken = tokenFromHash || sessionStorage.getItem('mossToken') || '';
@@ -145,9 +186,32 @@ if (tokenFromHash) {
   history.replaceState(null, '', location.pathname + location.search);
 }
 
-const sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-  ? crypto.randomUUID()
-  : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let MossClient = null;
+let client = null;
+let indexes = [];
+let currentIndex = null;
+let requestId = 0;
+let searchTimeout = null;
+
+const $ = id => document.getElementById(id);
+const select = $('index-select');
+const loadBtn = $('load-btn');
+const loadStatus = $('load-status');
+const indexInfo = $('index-info');
+const searchInput = $('search-input');
+const topkInput = $('topk-input');
+const alphaSlider = $('alpha-slider');
+const alphaDisplay = $('alpha-display');
+const results = $('results');
+const searchForm = $('search-form');
+const connectPanel = $('connect-panel');
+const mainPanel = $('main-panel');
+const connectForm = $('connect-form');
+const pidInput = $('pid-input');
+const pkeyInput = $('pkey-input');
+const connectBtn = $('connect-btn');
+const connectStatus = $('connect-status');
+const changeConnBtn = $('change-conn-btn');
 
 function apiFetch(path, options = {}) {
   const headers = { ...options.headers, 'X-Moss-Token': mossToken };
@@ -166,36 +230,92 @@ async function errorFromResponse(res, fallback) {
   return new Error(`${message} (HTTP ${res.status})`);
 }
 
-let indexes = [];
-let currentIndex = null;
-let requestId = 0;
-let searchAbort = null;
-let searchTimeout = null;
+function showStatus(el, kind, text) {
+  el.classList.remove('hidden');
+  el.className = kind ? `status-box status-${kind}` : 'status-box';
+  el.textContent = text;
+}
 
-const $ = id => document.getElementById(id);
-const select = $('index-select');
-const loadBtn = $('load-btn');
-const loadStatus = $('load-status');
-const indexInfo = $('index-info');
-const searchInput = $('search-input');
-const topkInput = $('topk-input');
-const alphaSlider = $('alpha-slider');
-const alphaDisplay = $('alpha-display');
-const results = $('results');
-const searchForm = $('search-form');
+function hideStatus(el) {
+  el.classList.add('hidden');
+  el.textContent = '';
+}
+
+// Load the WASM SDK (dynamic import so a CDN failure can be reported).
+async function loadSdk() {
+  if (MossClient) return;
+  const mod = await import('@moss-dev/moss-web');
+  MossClient = mod.MossClient;
+}
+
+async function init() {
+  if (!mossToken) {
+    connectPanel.classList.remove('hidden');
+    showStatus(connectStatus, 'error',
+      'No token found in the URL. Re-open the playground from the address printed by `moss playground`.');
+    return;
+  }
+  let injected;
+  try {
+    const res = await apiFetch('/api/config');
+    if (!res.ok) throw await errorFromResponse(res, 'Failed to reach the playground server');
+    injected = await res.json();
+  } catch (e) {
+    connectPanel.classList.remove('hidden');
+    showStatus(connectStatus, 'error', e.message);
+    return;
+  }
+  if (injected && injected.projectId && injected.projectKey) {
+    await connect(injected.projectId, injected.projectKey);
+  } else {
+    connectPanel.classList.remove('hidden');
+  }
+}
+
+async function connect(pid, pkey) {
+  connectPanel.classList.remove('hidden');
+  mainPanel.classList.add('hidden');
+  showStatus(connectStatus, '',
+    'Loading the Moss WASM engine (first load downloads the embedding model)...');
+  connectBtn.disabled = true;
+  try {
+    await loadSdk();
+    client = await MossClient.create(pid, pkey);
+    connectPanel.classList.add('hidden');
+    mainPanel.classList.remove('hidden');
+    await refreshIndexList();
+  } catch (e) {
+    console.error('Connection failed:', e);
+    showStatus(connectStatus, 'error', `Connection failed: ${e.message}`);
+    connectBtn.disabled = false;
+  }
+}
+
+connectForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const pid = pidInput.value.trim();
+  const pkey = pkeyInput.value.trim();
+  if (!pid || !pkey) {
+    showStatus(connectStatus, 'error', 'Enter both Project ID and Project Key.');
+    return;
+  }
+  connect(pid, pkey);
+});
+
+changeConnBtn.addEventListener('click', () => {
+  mainPanel.classList.add('hidden');
+  connectPanel.classList.remove('hidden');
+  hideStatus(connectStatus);
+  connectBtn.disabled = false;
+});
 
 async function refreshIndexList() {
   select.innerHTML = '<option value="">Loading...</option>';
   let idxs;
   try {
-    const res = await apiFetch('/api/indexes');
-    if (!res.ok) {
-      throw await errorFromResponse(res, 'Failed to fetch indexes');
-    }
-    const data = await res.json();
-    indexes = data.indexes || [];
+    idxs = await client.listIndexes();
   } catch (e) {
-    console.error('fetchIndexes failed:', e);
+    console.error('listIndexes failed:', e);
     select.innerHTML = '<option value="">Error loading indexes</option>';
     loadBtn.disabled = true;
     const status = document.createElement('div');
@@ -206,6 +326,7 @@ async function refreshIndexList() {
     select.parentElement.appendChild(status);
     return;
   }
+  indexes = idxs || [];
   select.innerHTML = '';
   if (indexes.length === 0) {
     select.innerHTML = '<option value="">No indexes found</option>';
@@ -234,7 +355,7 @@ function updateLoadBtn() {
   alphaSlider.disabled = !isLoaded;
   if (isLoaded) {
     loadStatus.className = 'status-box status-success';
-    loadStatus.textContent = 'Index loaded into server memory';
+    loadStatus.textContent = 'Index loaded into browser memory';
     loadStatus.classList.remove('hidden');
   } else {
     loadStatus.classList.add('hidden');
@@ -265,30 +386,17 @@ function showIndexInfo(idx) {
 
 async function loadIndex() {
   const name = select.value;
-  if (!name) return;
-
-  const loadReqId = ++requestId;
-  if (searchTimeout) clearTimeout(searchTimeout);
-  if (searchAbort) searchAbort.abort();
-  searchAbort = null;
-  select.disabled = true;
+  if (!name || !client) return;
 
   loadBtn.disabled = true;
   loadBtn.innerHTML = '<span class="spinner">&#9696;</span> Loading...';
   loadStatus.classList.remove('hidden');
   loadStatus.className = 'status-box';
-  loadStatus.textContent = 'Connecting to cloud...';
+  loadStatus.textContent = 'Downloading index into the browser...';
+  select.disabled = true;
 
   try {
-    const res = await apiFetch('/api/load-index', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) {
-      throw await errorFromResponse(res, 'Failed to load index');
-    }
-    if (loadReqId !== requestId || select.value !== name) return;
+    await client.loadIndex(name);
     currentIndex = name;
     results.innerHTML = '';
     const empty = document.createElement('div');
@@ -298,7 +406,6 @@ async function loadIndex() {
     updateLoadBtn();
     searchInput.focus();
   } catch (e) {
-    if (loadReqId !== requestId) return;
     console.error('loadIndex failed:', e);
     updateLoadBtn();
     loadStatus.classList.remove('hidden');
@@ -332,7 +439,7 @@ function renderResults(searchResults) {
     const timeSpan = document.createElement('span');
     timeSpan.textContent = `${timeMs} ms`;
     summary.appendChild(timeSpan);
-}
+  }
 
   results.appendChild(summary);
 
@@ -381,13 +488,11 @@ function renderResults(searchResults) {
 
 function handleSearch(e) {
   if (e) e.preventDefault();
-  if (!currentIndex) return;
+  if (!currentIndex || !client) return;
 
   const query = searchInput.value.trim();
   if (!query) {
     if (searchTimeout) clearTimeout(searchTimeout);
-    if (searchAbort) searchAbort.abort();
-    searchAbort = null;
     ++requestId;
     results.innerHTML = '';
     const empty = document.createElement('div');
@@ -407,34 +512,22 @@ function handleSearch(e) {
 
   if (searchTimeout) clearTimeout(searchTimeout);
   const thisRequestId = ++requestId;
-  if (searchAbort) searchAbort.abort();
-  searchAbort = new AbortController();
-  const thisAbort = searchAbort;
   const idx = currentIndex;
   searchTimeout = setTimeout(async () => {
     const placeholder = results.querySelector('.empty-state');
     if (placeholder) placeholder.innerHTML = '<p>Searching...</p>';
 
     try {
-      const res = await apiFetch('/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: thisAbort.signal,
-        body: JSON.stringify({ name: idx, query, topK, alpha, requestId: thisRequestId, sessionId }),
-      });
-      if (!res.ok) {
-        throw await errorFromResponse(res, 'Query failed');
-      }
-      const searchResults = await res.json();
-      if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
+      const searchResults = await client.query(idx, query, { topK, alpha });
+      if (thisRequestId !== requestId) return;
       renderResults(searchResults);
-    } catch (e) {
-      if (thisRequestId !== requestId || thisAbort.signal.aborted) return;
-      console.error('Query failed:', e);
+    } catch (err) {
+      if (thisRequestId !== requestId) return;
+      console.error('Query failed:', err);
       results.innerHTML = '';
       const status = document.createElement('div');
       status.className = 'status-box status-error';
-      status.textContent = `Query failed: ${e.message || e}`;
+      status.textContent = `Query failed: ${err.message || err}`;
       results.appendChild(status);
     }
   }, 150);
@@ -443,8 +536,6 @@ function handleSearch(e) {
 select.addEventListener('change', () => {
   ++requestId;
   if (searchTimeout) clearTimeout(searchTimeout);
-  if (searchAbort) searchAbort.abort();
-  searchAbort = null;
   results.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'empty-state';
@@ -471,16 +562,7 @@ alphaSlider.addEventListener('input', () => {
   if (currentIndex && searchInput.value.trim()) handleSearch();
 });
 
-if (!mossToken) {
-  select.innerHTML = '<option value="">Missing token</option>';
-  loadBtn.disabled = true;
-  const status = document.createElement('div');
-  status.className = 'status-box status-error';
-  status.textContent = 'No token found in the URL. Re-open the playground from the address printed by `moss playground`.';
-  select.parentElement.appendChild(status);
-} else {
-  refreshIndexList();
-}
+init();
 </script>
 </body>
 </html>

@@ -167,16 +167,21 @@ moss playground --no-open
 When you run `moss playground`, it prints a URL that includes a per-run token in the
 `#<token>` fragment, e.g. `http://127.0.0.1:8765/#Abc123...`. Open that exact URL in
 your browser. With `--no-open`, copy the full URL printed by the command — including
-the `#<token>` fragment — since the token is required to authenticate API requests.
+the `#<token>` fragment — since the token is required to fetch the project credentials
+from the server.
 
-The playground serves a single-page app that lets you:
+The playground serves a single-page app that loads the Moss WASM SDK
+(`@moss-dev/moss-web`) from the unpkg CDN and runs index loading and semantic search
+entirely in the browser. You can:
 
 - Browse and load indexes
 - Run semantic search with configurable `topK` and `alpha`
 - View results with scores and metadata
 
-All API calls are proxied through the server, so your project key is never exposed
-to the browser.
+When credentials are available (via CLI flags, `MOSS_PROJECT_ID`/`MOSS_PROJECT_KEY`
+env vars, or a `--profile`), the server injects them through a token-protected
+`/api/config` endpoint and the app connects automatically. If no credentials are
+configured, the app shows a connection form where you can enter them in the browser.
 
 ### Job Tracking
 
