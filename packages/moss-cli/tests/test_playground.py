@@ -20,6 +20,19 @@ class FakeClient:
         return SimpleNamespace(docs=[doc], time_taken_ms=12, query=query)
 
 
+class FakeLoadClient:
+    def __init__(self):
+        self.loaded = []
+        self.unloaded = []
+
+    def load_index(self, name):
+        self.loaded.append(name)
+        return name
+
+    def unload_index(self, name):
+        self.unloaded.append(name)
+
+
 class FakeWorker:
     def __init__(self, client):
         self.client = client
@@ -57,6 +70,7 @@ def _make_handler(monkeypatch, client=None, worker=None):
     monkeypatch.setattr(PlaygroundHandler, "client", client)
     monkeypatch.setattr(PlaygroundHandler, "_worker", worker)
     monkeypatch.setattr(PlaygroundHandler, "_latest_request_ids", {})
+    monkeypatch.setattr(PlaygroundHandler, "_loaded_index", None)
     return handler, captured
 
 
@@ -190,6 +204,16 @@ def test_query_rejects_non_finite_alpha(monkeypatch):
         handler._handle_post_query(body)
         assert captured["status"] == 400, f"expected 400 for alpha={bad}"
         assert client.query_calls == []
+
+
+def test_query_rejects_oversized_int_alpha(monkeypatch):
+    client = FakeClient()
+    handler, captured = _make_handler(monkeypatch, client=client, worker=FakeWorker(client))
+    body = _valid_body()
+    body["alpha"] = 10**400
+    handler._handle_post_query(body)
+    assert captured["status"] == 400
+    assert client.query_calls == []
 
 
 def test_query_rejects_out_of_range_alpha(monkeypatch):
@@ -349,6 +373,40 @@ def test_post_accepts_empty_body_fallback(monkeypatch):
     handler.rfile = io.BytesIO(b"{}")
     handler.do_POST()
     assert captured["status"] == 400
+
+
+def test_load_index_unloads_previous(monkeypatch):
+    client = FakeLoadClient()
+    handler, captured = _make_handler(monkeypatch, client=client, worker=FakeWorker(client))
+    monkeypatch.setattr(PlaygroundHandler, "_loaded_index", "idx-a")
+
+    handler._handle_post_load_index({"name": "idx-b"})
+    assert captured["status"] == 200
+    assert client.unloaded == ["idx-a"]
+    assert client.loaded == ["idx-b"]
+    assert PlaygroundHandler._loaded_index == "idx-b"
+
+
+def test_load_index_reuses_current_index_without_unload(monkeypatch):
+    client = FakeLoadClient()
+    handler, captured = _make_handler(monkeypatch, client=client, worker=FakeWorker(client))
+    monkeypatch.setattr(PlaygroundHandler, "_loaded_index", "idx-a")
+
+    handler._handle_post_load_index({"name": "idx-a"})
+    assert captured["status"] == 200
+    assert client.unloaded == []
+    assert client.loaded == ["idx-a"]
+    assert PlaygroundHandler._loaded_index == "idx-a"
+
+
+def test_load_index_requires_name(monkeypatch):
+    client = FakeLoadClient()
+    handler, captured = _make_handler(monkeypatch, client=client, worker=FakeWorker(client))
+    for bad in (None, "", "   "):
+        handler._handle_post_load_index({"name": bad})
+        assert captured["status"] == 400, f"expected 400 for name={bad!r}"
+    assert client.loaded == []
+    assert client.unloaded == []
 
 
 def test_query_skips_stale_queued_job(monkeypatch):

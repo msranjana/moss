@@ -12,7 +12,6 @@ import inspect
 import json
 import math
 import secrets
-import socket
 import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -128,6 +127,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
     _worker: AsyncWorker | None = None
     _latest_request_ids: Dict[str, int] = {}
     _request_lock = threading.Lock()
+    _loaded_index: str | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HERE / "playground"), **kwargs)
@@ -300,7 +300,18 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
         if name is None:
             return
         try:
-            worker.submit(lambda: client.load_index(name))
+            async def _call():
+                previous = PlaygroundHandler._loaded_index
+                if previous is not None and previous != name:
+                    unload = client.unload_index(previous)
+                    if inspect.isawaitable(unload):
+                        await unload
+                result = client.load_index(name)
+                if inspect.isawaitable(result):
+                    result = await result
+                PlaygroundHandler._loaded_index = name
+                return name
+            worker.submit(_call)
             self._send_json(200, {"name": name})
         except Exception as e:
             self._send_error(e)
@@ -342,7 +353,11 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             if isinstance(raw_alpha, bool) or not isinstance(raw_alpha, (int, float)):
                 self._send_json(400, {"error": "'alpha' must be a number"})
                 return
-            alpha = float(raw_alpha)
+            try:
+                alpha = float(raw_alpha)
+            except OverflowError:
+                self._send_json(400, {"error": "'alpha' must be a finite number"})
+                return
             if not math.isfinite(alpha):
                 self._send_json(400, {"error": "'alpha' must be a finite number"})
                 return
@@ -386,15 +401,27 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
             self._send_error(e)
 
 
-def _find_free_port(start: int = 8765, max_attempts: int = 20) -> int:
+def _create_server(
+    handler: type,
+    start: int = 8765,
+    max_attempts: int = 20,
+) -> tuple[DaemonThreadingHTTPServer, int]:
+    """Construct the HTTP server on the first free port in the candidate range.
+
+    Binding happens inside ``DaemonThreadingHTTPServer``, so a port that is
+    probed free and then taken by another process is retried instead of
+    crashing the command (unlike a separate check-then-bind probe).
+    """
+    last_error: OSError | None = None
     for port in range(start, start + max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError(f"Could not find a free port in range {start}-{start + max_attempts}")
+        try:
+            return DaemonThreadingHTTPServer(("127.0.0.1", port), handler), port
+        except OSError as e:
+            last_error = e
+            continue
+    raise RuntimeError(
+        f"Could not find a free port in range {start}-{start + max_attempts}"
+    ) from last_error
 
 
 def playground_command(
@@ -425,15 +452,16 @@ def playground_command(
     client = worker.submit(lambda: MossClient(pid, pkey))
     
     # Start server
-    final_port = port if port else _find_free_port()
-    server_addr = ("127.0.0.1", final_port)
+    if port:
+        server = DaemonThreadingHTTPServer(("127.0.0.1", port), PlaygroundHandler)
+        final_port = port
+    else:
+        server, final_port = _create_server(PlaygroundHandler)
 
     PlaygroundHandler.client = client
     PlaygroundHandler._worker = worker
     PlaygroundHandler._token = secrets.token_urlsafe(32)
     PlaygroundHandler._server_host = f"127.0.0.1:{final_port}"
-
-    server = DaemonThreadingHTTPServer(server_addr, PlaygroundHandler)
     url = f"http://127.0.0.1:{final_port}"
     frag_url = f"{url}/#{PlaygroundHandler._token}"
 
