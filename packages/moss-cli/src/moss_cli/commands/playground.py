@@ -306,6 +306,7 @@ class PlaygroundHandler(SimpleHTTPRequestHandler):
                     unload = client.unload_index(previous)
                     if inspect.isawaitable(unload):
                         await unload
+                    PlaygroundHandler._loaded_index = None
                 result = client.load_index(name)
                 if inspect.isawaitable(result):
                     result = await result
